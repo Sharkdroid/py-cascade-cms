@@ -1,6 +1,6 @@
-Metadata-Version: 2.1
+Metadata-Version: 2.4
 Name: py-cascade-cms-api
-Version: 1.1.3
+Version: 1.2.2
 Summary: Simplify interaction with Hannon Hill's Cascade CMS 8 REST API
 Home-page: https://github.com/austinjhunt/CascadeCMS
 Author: Austin Hunt
@@ -11,7 +11,6 @@ Project-URL: Bug Reports, https://github.com/austinjhunt/CascadeCMS/issues
 Project-URL: Source Code, https://github.com/austinjhunt/CascadeCMS
 Project-URL: Cascade CMS REST API Docs, https://www.hannonhill.com/cascadecms/latest/developing-in-cascade/rest-api/index.html
 Keywords: cascade,cms,rest,api,hannon hill,driver
-Platform: UNKNOWN
 Classifier: Intended Audience :: System Administrators
 Classifier: Topic :: Software Development :: Libraries :: Python Modules
 Classifier: Programming Language :: Python :: 3.6
@@ -25,6 +24,21 @@ Classifier: Operating System :: OS Independent
 Requires-Python: >=3.6
 Description-Content-Type: text/markdown
 License-File: LICENSE.md
+Requires-Dist: requests
+Requires-Dist: aiohttp
+Dynamic: author
+Dynamic: author-email
+Dynamic: classifier
+Dynamic: description
+Dynamic: description-content-type
+Dynamic: home-page
+Dynamic: keywords
+Dynamic: license
+Dynamic: license-file
+Dynamic: project-url
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary
 
 # Cascade CMS 8 REST API Python Driver
 
@@ -62,5 +76,3 @@ for s in sites:
     driver.debug(asset)
 
 ```
-
-

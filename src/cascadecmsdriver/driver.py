@@ -4,18 +4,22 @@ for enterprise-scale content management. """
 import requests
 import logging
 import json
-from .cmstypes import *
+from cmstypes import *
 from zeep import Client, xsd
 from zeep.transports import Transport
+import requests_cache
 
+
+#TODO: update all Identifier types to use CascadeIdentifier class instead.
 
 class CascadeCMSRestDriver:
+    CACHE_LOCATION="./app/cache" #with .sqlite at the end
     def __init__(self, organization_name="", username="", password="", api_key="", verbose=False):
         self.setup_logging(verbose=verbose)
         self.info('Setting up new driver')
         self.organization_name = organization_name
         self.base_url = f'https://{self.organization_name}.cascadecms.com'
-        self.session = requests.Session()
+        self.session = requests_cache.CachedSession(cache_name=CascadeCMSRestDriver.CACHE_LOCATION,expire_after=259200)
         if username == "" and password == "":
             assert api_key != ""
             self.debug(f"Using API Key: {api_key}")
@@ -24,11 +28,10 @@ class CascadeCMSRestDriver:
             }
         if api_key == "":
             assert username != "" and password != ""
-            print(f'Using username and password: {username, password}')
+            self.debug(f'Using username/password authentication')
             self.session.auth = requests.auth.HTTPBasicAuth(username, password)
 
     def setup_logging(self, verbose=False):
-        """ set up self.logger for Driver logging """
         self.logger = logging.getLogger('Cascade CMS Driver')
         formatter = logging.Formatter('%(prefix)s - %(message)s')
         handler = logging.StreamHandler()
@@ -52,62 +55,29 @@ class CascadeCMSRestDriver:
         self.logger.error(msg, extra=self.prefix)
 
     def read_asset(self, asset_type='page', asset_identifier=None):
-        """ read a CMS asset given its id and type"""
         url = f'{self.base_url}/api/v1/read/{asset_type}/{asset_identifier}'
-        self.debug(f'Reading {asset_type} {asset_identifier} with {url}')
+        self.debug(f'Reading {asset_type} {asset_identifier} at {url}')
         return self.session.get(url).json()
 
     def read_asset_workflow_settings(self, asset_type='page', asset_identifier=None):
-        """ read workflow settings on a specific asset """
         url = f'{self.base_url}/api/v1/readWorkflowSettings/{asset_type}/{asset_identifier}'
-        self.debug(
-            f'Reading {asset_type} {asset_identifier} workflow settings with {url}')
+        self.debug(f'Reading workflow settings for {asset_type} {asset_identifier} at {url}')
         return self.session.get(url).json()
 
     def edit_asset_workflow_settings(self, asset_type='page', asset_identifier=None, payload=None):
-        """ edit workflow settings on a given asset of a given type.
-        Include “workflowSettings” in message body based on {wsdl}.
-        Its “identifier” property is not necessary since provided in URL.
-        If “workflowSettings” is not provided, the folder will have all workflow
-        definitions removed and workflow will not be required or inherited.
-        This method requires the inclusion of workflow_settings. If you want to remove all workflow
-        definitions, use the clear_asset_workflow_settings(asset_type,asset_identifier) method instead.
-        """
-        response = None
-        if payload:
-            # required keys in workflow settings
-            if 'workflowSettings' in payload and \
-                    all([x in payload['workflowSettings'] for x in ['workflowDefinitions', 'inheritWorkflows', 'requireWorkflow']]):
-                url = f'{self.base_url}/api/v1/editWorkflowSettings/{asset_type}/{asset_identifier}'
-                self.debug(
-                    f'Editing workflow settings on {asset_type} {asset_identifier} with {url}')
-                if isinstance(payload, dict):
-                    self.debug(
-                        'Payload is a dictionary; converting to JSON string with json.dumps()')
-                    payload = json.dumps(payload)
-                response = self.session.post(url, data=payload).json()
-
-            else:
-                self.error(
-                    f'Not editing workflow settings on page {asset_identifier}; '
-                    f'workflow settings must include keys workflowDefinitions '
-                    '(asset identifiers list), inheritWorkflows (bool), requireWorkflow '
-                    '(bool)'
-                )
+        if payload and isinstance(payload, dict) and 'workflowSettings' in payload:
+            url = f'{self.base_url}/api/v1/editWorkflowSettings/{asset_type}/{asset_identifier}'
+            self.debug(f'Editing workflow settings for {asset_type} {asset_identifier} at {url}')
+            body = json.dumps(payload)
+            return self.session.post(url, data=body).json()
         else:
-            self.error(
-                f'Not editing workflow settings on page {asset_identifier}; '
-                f'workflow settings not provided. Provide workflow settings based on WSDL'
-            )
-        return response
+            self.error('Payload must include workflowSettings dict')
+            return None
 
     def workflows_exist(self, workflow_settings):
-        """ Determine whether any (1 or more) workflows are applied within a
-        given readWorkflowSettings response"""
-        workflow_settings = workflow_settings if 'workflowSettings' not in workflow_settings else workflow_settings[
-            'workflowSettings']
-        return len(workflow_settings['workflowDefinitions']) > 0 or \
-            len(workflow_settings['workflowDefinitions']) > 0
+        ws = workflow_settings.get('workflowSettings', workflow_settings)
+        defs = ws.get('workflowDefinitions', [])
+        return bool(defs)
 
     def get_user_by_email(self, email_address=""):
         return self.read_asset(asset_type='user', asset_identifier=email_address)
@@ -117,167 +87,199 @@ class CascadeCMSRestDriver:
 
     def publish_asset(self, asset_type='page', asset_identifier='', publish_information=None):
         url = f'{self.base_url}/api/v1/publish/{asset_type}/{asset_identifier}'
-        self.debug(
-            f'Publishing {asset_type} asset {asset_identifier} with {url}')
-        if publish_information:
-            self.debug(
-                f'Publish information provided in request: {publish_information}')
-            publish_information = json.dumps(publish_information)
-        return self.session.post(url, data=publish_information).json()
+        self.debug(f'Publishing {asset_type} {asset_identifier} at {url}')
+        body = json.dumps(publish_information) if publish_information else None
+        return self.session.post(url, data=body).json()
 
     def unpublish_asset(self, asset_type='page', asset_identifier=''):
-        self.debug(
-            f'Unpublishing {asset_type} asset {asset_identifier}')
-        return self.publish_asset(
-            asset_type=asset_type,
-            asset_identifier=asset_identifier,
-            publish_information={
-                'publishInformation': {
-                    'unpublish': True
-                }
-            })
+        self.debug(f'Unpublishing {asset_type} {asset_identifier}')
+        return self.publish_asset(asset_type, asset_identifier, {'unpublish': True})
 
-    def copy_asset_to_new_container(self, asset_type: str = 'page', asset_identifier: str = '', new_name: str = '', destination_container_identifier: str = ''):
+    def copy_asset_to_new_container(self, asset_type='page', asset_identifier='', new_name='', destination_container_identifier=''):
         url = f'{self.base_url}/api/v1/copy/{asset_type}/{asset_identifier}'
-        payload = json.dumps({
+        payload = {
             'copyParameters': {
                 'destinationContainerIdentifier': {
                     'type': 'folder',
-                    'id': destination_container_identifier,
+                    'id': destination_container_identifier
                 },
                 'doWorkflow': False,
-                'newName': new_name,
+                'newName': new_name
             }
-        })
-        self.debug(f'Copying asset... POST payload {payload} to URL {url}')
-        return self.session.post(url, data=payload).json()
+        }
+        self.debug(f'Copying asset payload: {payload} to {url}')
+        return self.session.post(url, data=json.dumps(payload)).json()
 
     def batch(self, operations: [Operation]):
-        # Returned entity name is "batchReturn"
-        pass
+        url = f'{self.base_url}/api/v1/batch'
+        ops_list = [json.loads(op.toJson()) for op in operations]
+        payload = {'operations': ops_list}
+        self.debug(f'Batch payload: {payload}')
+        return self.session.post(url, data=json.dumps(payload)).json()
 
     def checkIn(self, identifier: Identifier, comments: str):
-        # Returned entity name is "checkInReturn"
-        url = f'{self.base_url}/api/v1/checkIn/{identifier.type}/{identifier.id}'
-        checkIn = CheckIn(identifier=identifier, comments=comments)
-        return self.session.post(url, data=checkIn.toJson()).json()
+        url = f'{self.base_url}/api/v1/checkIn/{identifier.asset_type}/{identifier.asset_id}'
+        payload = CheckIn(identifier=identifier, comments=comments).toJson()
+        self.debug(f'CheckIn payload: {payload} to {url}')
+        return self.session.post(url, data=payload).json()
 
     def checkOut(self, identifier: Identifier):
-        # Returned entity name is "checkOutReturn"
-        url = f'{self.base_url}/api/v1/checkOut/{identifier.type}/{identifier.id}'
-        checkOut = CheckOut(identifier=identifier)
-        return self.session.post(url, data=checkOut.toJson()).json()
+        url = f'{self.base_url}/api/v1/checkOut/{identifier.asset_type}/{identifier.asset_id}'
+        payload = CheckOut(identifier=identifier).toJson()
+        self.debug(f'CheckOut payload: {payload} to {url}')
+        return self.session.post(url, data=payload).json()
 
     def copy(self, identifier: Identifier, copyParameters: CopyParameters, workflowConfiguration: WorkflowConfiguration):
-        # Returned entity name is "copyReturn"
-        url = f'{self.base_url}/api/v1/copy/{identifier.type}/{identifier.id}'
-        copyPayload = Copy(
-            identifier=identifier,
-            copyParameters=copyParameters,
-            workflowConfiguration=workflowConfiguration
-        )
-        return self.session.post(url, data=copyPayload.toJson()).json()
+        url = f'{self.base_url}/api/v1/copy/{identifier.asset_type}/{identifier.asset_id}'
+        payload = Copy(identifier=identifier, copyParameters=copyParameters, workflowConfiguration=workflowConfiguration).toJson()
+        self.debug(f'Copy payload: {payload} to {url}')
+        return self.session.post(url, data=payload).json()
 
     def create(self, asset: Asset):
-        # Returned entity name is "createReturn"
-        pass
+        url = f'{self.base_url}/api/v1/create'
+        body = json.loads(asset.toJson())
+        payload = {'asset': body.get('asset', body)}
+        self.debug(f'Create payload: {payload}')
+        return self.session.post(url, data=json.dumps(payload)).json()
 
-    def delete(self, identifier: Identifier, deleteParameters: DeleteParameters, workflowConfiguration: WorkflowConfiguration):
-        # Returned entity name is "deleteReturn"
-        pass
+    def delete(self, identifier: Identifier, deleteParameters: DeleteParameters, workflowConfiguration: WorkflowConfiguration=None):
+        url = f'{self.base_url}/api/v1/delete/{identifier.asset_type}/{identifier.asset_id}'
+        payload = {'deleteParameters': json.loads(deleteParameters.toJson())}
+        if workflowConfiguration:
+            payload['workflowConfiguration'] = json.loads(workflowConfiguration.toJson())
+        self.debug(f'Delete payload: {payload}')
+        return self.session.post(url, data=json.dumps(payload)).json()
 
     def deleteMessage(self, identifier: Identifier):
-        # Returned entity name is "deleteMessageReturn"
-        pass
+        url = f'{self.base_url}/api/v1/deleteMessage/{identifier.asset_type}/{identifier.asset_id}'
+        self.debug(f'DeleteMessage at {url}')
+        return self.session.post(url).json()
 
     def edit(self, asset: Asset):
-        # Returned entity name is "editReturn"
-        pass
+        url = f'{self.base_url}/api/v1/edit'
+        payload = asset
+        self.debug(f'Edit payload: {payload}')
+        return self.session.post(url, data=json.dumps(payload)).json()
 
-    def editAccessRights(self, accessRightsInformation: AccessRightsInformation, applyToChildren: bool):
-        # Returned entity name is "editAccessRightsReturn"
-        pass
+    def editAccessRights(self, accessRightsInformation: AccessRightsInformation, applyToChildren: bool=False):
+        url = f'{self.base_url}/api/v1/editAccessRights/{accessRightsInformation.identifier.asset_type}/{accessRightsInformation.identifier.asset_id}'
+        payload = {'accessRightsInformation': json.loads(accessRightsInformation.toJson()), 'applyToChildren': applyToChildren}
+        self.debug(f'EditAccessRights payload: {payload}')
+        return self.session.post(url, data=json.dumps(payload)).json()
 
     def editPreference(self, preference: Preference):
-        # Returned entity name is "editPreferenceReturn"
-        pass
+        url = f'{self.base_url}/api/v1/editPreference'
+        payload = {'preference': json.loads(preference.toJson())}
+        self.debug(f'EditPreference payload: {payload}')
+        return self.session.post(url, data=json.dumps(payload)).json()
 
-    def editWorkflowSettings(self, workflowSettings: WorkflowSettings, applyInheritWorkflowsToChildren: bool, applyRequireWorkflowToChildren: bool):
-        # Returned entity name is "editWorkflowSettingsReturn"
-        pass
+    def editWorkflowSettings(self, workflowSettings: WorkflowSettings, applyInheritWorkflowsToChildren: bool=False, applyRequireWorkflowToChildren: bool=False):
+        ident = workflowSettings.identifier
+        url = f'{self.base_url}/api/v1/editWorkflowSettings/{ident.asset_type}/{ident.asset_id}'
+        payload = {'workflowSettings': json.loads(workflowSettings.toJson()),
+                   'applyInheritWorkflowsToChildren': applyInheritWorkflowsToChildren,
+                   'applyRequireWorkflowToChildren': applyRequireWorkflowToChildren}
+        self.debug(f'EditWorkflowSettings payload: {payload}')
+        return self.session.post(url, data=json.dumps(payload)).json()
 
     def listEditorConfigurations(self, identifier: Identifier):
-        # Returned entity name is "listEditorConfigurationsReturn"
-        pass
+        url = f'{self.base_url}/api/v1/listEditorConfigurations/{identifier.asset_type}/{identifier.asset_id}'
+        self.debug(f'Listing EditorConfigurations at {url}')
+        return self.session.get(url).json()
 
     def listMessages(self):
-        # Returned entity name is "listMessagesReturn"
-        pass
+        url = f'{self.base_url}/api/v1/listMessages'
+        self.debug(f'Listing Messages at {url}')
+        return self.session.get(url).json()
 
     def listSites(self):
-        """ List all sites """
         url = f'{self.base_url}/api/v1/listSites'
+        self.debug(f'Listing Sites at {url}')
         return self.session.get(url).json()
 
     def listSubscribers(self, identifier: Identifier):
-        # Returned entity name is "listSubscribersReturn"
-        pass
+        url = f'{self.base_url}/api/v1/listSubscribers/{identifier.asset_type}/{identifier.asset_id}'
+        self.debug(f'Listing Subscribers at {url}')
+        return self.session.get(url).json()
 
     def markMessage(self, identifier: Identifier, markType: MessageMarkType):
-        # Returned entity name is "markMessageReturn"
-        pass
+        url = f'{self.base_url}/api/v1/markMessage/{identifier.asset_type}/{identifier.asset_id}'
+        payload = {'markType': markType.value if hasattr(markType, 'value') else str(markType)}
+        self.debug(f'MarkMessage payload: {payload}')
+        return self.session.post(url, data=json.dumps(payload)).json()
 
-    def move(self, identifier: Identifier, moveParameters: MoveParameters, workflowConfiguration: WorkflowConfiguration):
-        # Returned entity name is "moveReturn"
-        pass
+    def move(self, identifier: Identifier, moveParameters: MoveParameters, workflowConfiguration: WorkflowConfiguration=None):
+        url = f'{self.base_url}/api/v1/move/{identifier.asset_type}/{identifier.asset_id}'
+        payload = {'moveParameters': json.loads(moveParameters.toJson())}
+        if workflowConfiguration:
+            payload['workflowConfiguration'] = json.loads(workflowConfiguration.toJson())
+        self.debug(f'Move payload: {payload}')
+        return self.session.post(url, data=json.dumps(payload)).json()
 
     def performWorkflowTransition(self, workflowTransitionInformation: WorkflowTransitionInformation):
-        # Returned entity name is "performWorkflowTransitionReturn"
-        pass
+        url = f'{self.base_url}/api/v1/performWorkflowTransition'
+        payload = {'workflowTransitionInformation': json.loads(workflowTransitionInformation.toJson())}
+        self.debug(f'PerformWorkflowTransition payload: {payload}')
+        return self.session.post(url, data=json.dumps(payload)).json()
 
     def publish(self, publishInformation: PublishInformation):
-        # Returned entity name is "publishReturn"
-        pass
+        ident = publishInformation.identifier
+        url = f'{self.base_url}/api/v1/publish/{ident.asset_type}/{ident.asset_id}'
+        payload = {'publishInformation': json.loads(publishInformation.toJson())}
+        self.debug(f'Publish payload: {payload}')
+        return self.session.post(url, data=json.dumps(payload)).json()
 
     def read(self, identifier: Identifier):
-        # Returned entity name is "readReturn"
-        pass
+        url = f'{self.base_url}/api/v1/read/{identifier.asset_type}/{identifier.asset_id}'
+        self.debug(f'Reading asset at {url}')
+        return self.session.get(url).json()
 
     def readAccessRights(self, identifier: Identifier):
         url = f'{self.base_url}/api/v1/readAccessRights/{identifier.asset_type}/{identifier.asset_id}'
+        self.debug(f'Reading access rights at {url}')
         return self.session.get(url).json()
 
     def readAudits(self, auditParameters: AuditParameters):
-        # Returned entity name is "readAuditsReturn"
-        pass
+        url = f'{self.base_url}/api/v1/readAudits/{auditParameters.identifier.asset_type}/{auditParameters.identifier.asset_id}'
+        payload = {'auditParameters': json.loads(auditParameters.toJson())}
+        self.debug(f'ReadAudits payload: {payload}')
+        return self.session.post(url, data=json.dumps(payload)).json()
 
     def readPreferences(self):
-        # Returned entity name is "readPreferencesReturn"
-        pass
+        url = f'{self.base_url}/api/v1/readPreferences'
+        self.debug(f'Reading preferences at {url}')
+        return self.session.get(url).json()
 
     def readWorkflowInformation(self, identifier: Identifier):
-        # Returned entity name is "readWorkflowInformationReturn"
-        pass
+        url = f'{self.base_url}/api/v1/readWorkflowInformation/{identifier.asset_type}/{identifier.asset_id}'
+        self.debug(f'ReadWorkflowInformation at {url}')
+        return self.session.get(url).json()
 
     def readWorkflowSettings(self, identifier: Identifier):
-        # Returned entity name is "readWorkflowSettingsReturn"
-        pass
+        url = f'{self.base_url}/api/v1/readWorkflowSettings/{identifier.asset_type}/{identifier.asset_id}'
+        self.debug(f'ReadWorkflowSettings at {url}')
+        return self.session.get(url).json()
 
     def search(self, searchInformation: SearchInformation):
-        # Returned entity name is "searchReturn"
-        pass
+        url = f'{self.base_url}/api/v1/search'
+        payload = {'searchInformation': json.loads(searchInformation.toJson())}
+        self.debug(f'Search payload: {payload}')
+        return self.session.post(url, data=json.dumps(payload)).json()
 
     def sendMessage(self, message: Message):
-        # Returned entity name is "sendMessageReturn"
-        pass
+        url = f'{self.base_url}/api/v1/sendMessage'
+        payload = {'message': json.loads(message.toJson())}
+        self.debug(f'SendMessage payload: {payload}')
+        return self.session.post(url, data=json.dumps(payload)).json()
 
     def siteCopy(self, originalSiteId: str = '', originalSiteName: str = '', newSiteName: str = ''):
         url = f'{self.base_url}/api/v1/siteCopy'
+        data = {'newSiteName': newSiteName}
         if originalSiteId.strip():
-            key, val = 'originalSiteId', originalSiteId
+            data['originalSiteId'] = originalSiteId
         elif originalSiteName:
-            key, val = 'originalSiteName', originalSiteName
-        return self.session.post(url, data=json.dumps({
-            key: val,
-            'newSiteName': newSiteName
-        })).json()
+            data['originalSiteName'] = originalSiteName
+        self.debug(f'SiteCopy payload: {data}')
+        return self.session.post(url, data=json.dumps(data)).json()
+
+

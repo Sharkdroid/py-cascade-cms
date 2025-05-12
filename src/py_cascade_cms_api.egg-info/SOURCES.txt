@@ -1,10 +1,8 @@
 LICENSE.md
 README.md
 setup.py
-src/cascadecmsdriver/__init__.py
 src/cascadecmsdriver/cmstypes.py
 src/cascadecmsdriver/driver.py
-src/cascadecmsdriver/test.py
 src/py_cascade_cms_api.egg-info/PKG-INFO
 src/py_cascade_cms_api.egg-info/SOURCES.txt
 src/py_cascade_cms_api.egg-info/dependency_links.txt

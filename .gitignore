@@ -1,4 +1,8 @@
 __pycache__
 test/*
 .env
-venv
+.venv
+.devcontainer/
+./src/cascadecmsdriver/.env
+./app/*
+./build/
