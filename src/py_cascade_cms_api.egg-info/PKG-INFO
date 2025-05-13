@@ -24,8 +24,10 @@ Classifier: Operating System :: OS Independent
 Requires-Python: >=3.6
 Description-Content-Type: text/markdown
 License-File: LICENSE.md
-Requires-Dist: requests
-Requires-Dist: aiohttp
+Requires-Dist: aiohttp==3.11.18
+Requires-Dist: requests==2.31.0
+Requires-Dist: requests-cache==1.2.1
+Requires-Dist: aiohttp-client-cache==0.13.0
 Dynamic: author
 Dynamic: author-email
 Dynamic: classifier

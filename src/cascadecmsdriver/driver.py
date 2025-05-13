@@ -4,9 +4,7 @@ for enterprise-scale content management. """
 import requests
 import logging
 import json
-from cmstypes import *
-from zeep import Client, xsd
-from zeep.transports import Transport
+from .cmstypes import *
 import requests_cache
 
 

@@ -4,18 +4,20 @@ for enterprise-scale content management. """
 import requests
 import logging
 import json
-from cmstypes import *
-from zeep import Client, xsd
-from zeep.transports import Transport
+from .cmstypes import *
+import requests_cache
 
+
+#TODO: update all Identifier types to use CascadeIdentifier class instead.
 
 class CascadeCMSRestDriver:
+    CACHE_LOCATION="./app/cache" #with .sqlite at the end
     def __init__(self, organization_name="", username="", password="", api_key="", verbose=False):
         self.setup_logging(verbose=verbose)
         self.info('Setting up new driver')
         self.organization_name = organization_name
         self.base_url = f'https://{self.organization_name}.cascadecms.com'
-        self.session = requests.Session()
+        self.session = requests_cache.CachedSession(cache_name=CascadeCMSRestDriver.CACHE_LOCATION,expire_after=259200)
         if username == "" and password == "":
             assert api_key != ""
             self.debug(f"Using API Key: {api_key}")
@@ -153,8 +155,7 @@ class CascadeCMSRestDriver:
 
     def edit(self, asset: Asset):
         url = f'{self.base_url}/api/v1/edit'
-        body = json.loads(asset.toJson())
-        payload = {'asset': body.get('asset', body)}
+        payload = asset
         self.debug(f'Edit payload: {payload}')
         return self.session.post(url, data=json.dumps(payload)).json()
 
@@ -278,3 +279,5 @@ class CascadeCMSRestDriver:
             data['originalSiteName'] = originalSiteName
         self.debug(f'SiteCopy payload: {data}')
         return self.session.post(url, data=json.dumps(data)).json()
+
+

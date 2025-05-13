@@ -42,5 +42,5 @@ setup(
     package_dir={'': 'src'},
     packages=setuptools.find_packages(where='src'),
     include_package_data=True,
-    install_requires=["requests", "aiohttp"],
+    install_requires=["aiohttp==3.11.18","requests==2.31.0","requests-cache==1.2.1","aiohttp-client-cache==0.13.0"],
 )
