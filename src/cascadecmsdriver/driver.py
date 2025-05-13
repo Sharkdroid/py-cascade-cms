@@ -115,20 +115,20 @@ class CascadeCMSRestDriver:
         self.debug(f'Batch payload: {payload}')
         return self.session.post(url, data=json.dumps(payload)).json()
 
-    def checkIn(self, identifier: Identifier, comments: str):
-        url = f'{self.base_url}/api/v1/checkIn/{identifier.asset_type}/{identifier.asset_id}'
+    def checkIn(self, identifier: CascadeIdentifier, comments: str):
+        url = f'{self.base_url}/api/v1/checkIn/{identifier.type}/{identifier.id}'
         payload = CheckIn(identifier=identifier, comments=comments).toJson()
         self.debug(f'CheckIn payload: {payload} to {url}')
         return self.session.post(url, data=payload).json()
 
-    def checkOut(self, identifier: Identifier):
-        url = f'{self.base_url}/api/v1/checkOut/{identifier.asset_type}/{identifier.asset_id}'
+    def checkOut(self, identifier: CascadeIdentifier):
+        url = f'{self.base_url}/api/v1/checkOut/{identifier.type}/{identifier.id}'
         payload = CheckOut(identifier=identifier).toJson()
         self.debug(f'CheckOut payload: {payload} to {url}')
         return self.session.post(url, data=payload).json()
 
-    def copy(self, identifier: Identifier, copyParameters: CopyParameters, workflowConfiguration: WorkflowConfiguration):
-        url = f'{self.base_url}/api/v1/copy/{identifier.asset_type}/{identifier.asset_id}'
+    def copy(self, identifier: CascadeIdentifier, copyParameters: CopyParameters, workflowConfiguration: WorkflowConfiguration):
+        url = f'{self.base_url}/api/v1/copy/{identifier.type}/{identifier.id}'
         payload = Copy(identifier=identifier, copyParameters=copyParameters, workflowConfiguration=workflowConfiguration).toJson()
         self.debug(f'Copy payload: {payload} to {url}')
         return self.session.post(url, data=payload).json()
@@ -140,27 +140,27 @@ class CascadeCMSRestDriver:
         self.debug(f'Create payload: {payload}')
         return self.session.post(url, data=json.dumps(payload)).json()
 
-    def delete(self, identifier: Identifier, deleteParameters: DeleteParameters, workflowConfiguration: WorkflowConfiguration=None):
-        url = f'{self.base_url}/api/v1/delete/{identifier.asset_type}/{identifier.asset_id}'
+    def delete(self, identifier: CascadeIdentifier, deleteParameters: DeleteParameters, workflowConfiguration: WorkflowConfiguration=None):
+        url = f'{self.base_url}/api/v1/delete/{identifier.type}/{identifier.id}'
         payload = {'deleteParameters': json.loads(deleteParameters.toJson())}
         if workflowConfiguration:
             payload['workflowConfiguration'] = json.loads(workflowConfiguration.toJson())
         self.debug(f'Delete payload: {payload}')
         return self.session.post(url, data=json.dumps(payload)).json()
 
-    def deleteMessage(self, identifier: Identifier):
-        url = f'{self.base_url}/api/v1/deleteMessage/{identifier.asset_type}/{identifier.asset_id}'
+    def deleteMessage(self, identifier: CascadeIdentifier):
+        url = f'{self.base_url}/api/v1/deleteMessage/{identifier.type}/{identifier.id}'
         self.debug(f'DeleteMessage at {url}')
         return self.session.post(url).json()
 
-    def edit(self, asset: Asset):
+    def edit(self, asset: CascadeWSDL):
         url = f'{self.base_url}/api/v1/edit'
         payload = asset
         self.debug(f'Edit payload: {payload}')
         return self.session.post(url, data=json.dumps(payload)).json()
 
     def editAccessRights(self, accessRightsInformation: AccessRightsInformation, applyToChildren: bool=False):
-        url = f'{self.base_url}/api/v1/editAccessRights/{accessRightsInformation.identifier.asset_type}/{accessRightsInformation.identifier.asset_id}'
+        url = f'{self.base_url}/api/v1/editAccessRights/{accessRightsInformation.identifier.type}/{accessRightsInformation.identifier.id}'
         payload = {'accessRightsInformation': json.loads(accessRightsInformation.toJson()), 'applyToChildren': applyToChildren}
         self.debug(f'EditAccessRights payload: {payload}')
         return self.session.post(url, data=json.dumps(payload)).json()
@@ -173,15 +173,15 @@ class CascadeCMSRestDriver:
 
     def editWorkflowSettings(self, workflowSettings: WorkflowSettings, applyInheritWorkflowsToChildren: bool=False, applyRequireWorkflowToChildren: bool=False):
         ident = workflowSettings.identifier
-        url = f'{self.base_url}/api/v1/editWorkflowSettings/{ident.asset_type}/{ident.asset_id}'
+        url = f'{self.base_url}/api/v1/editWorkflowSettings/{ident.type}/{ident.id}'
         payload = {'workflowSettings': json.loads(workflowSettings.toJson()),
                    'applyInheritWorkflowsToChildren': applyInheritWorkflowsToChildren,
                    'applyRequireWorkflowToChildren': applyRequireWorkflowToChildren}
         self.debug(f'EditWorkflowSettings payload: {payload}')
         return self.session.post(url, data=json.dumps(payload)).json()
 
-    def listEditorConfigurations(self, identifier: Identifier):
-        url = f'{self.base_url}/api/v1/listEditorConfigurations/{identifier.asset_type}/{identifier.asset_id}'
+    def listEditorConfigurations(self, identifier: CascadeIdentifier):
+        url = f'{self.base_url}/api/v1/listEditorConfigurations/{identifier.type}/{identifier.id}'
         self.debug(f'Listing EditorConfigurations at {url}')
         return self.session.get(url).json()
 
@@ -195,19 +195,19 @@ class CascadeCMSRestDriver:
         self.debug(f'Listing Sites at {url}')
         return self.session.get(url).json()
 
-    def listSubscribers(self, identifier: Identifier):
-        url = f'{self.base_url}/api/v1/listSubscribers/{identifier.asset_type}/{identifier.asset_id}'
+    def listSubscribers(self, identifier: CascadeIdentifier):
+        url = f'{self.base_url}/api/v1/listSubscribers/{identifier.type}/{identifier.id}'
         self.debug(f'Listing Subscribers at {url}')
         return self.session.get(url).json()
 
-    def markMessage(self, identifier: Identifier, markType: MessageMarkType):
-        url = f'{self.base_url}/api/v1/markMessage/{identifier.asset_type}/{identifier.asset_id}'
+    def markMessage(self, identifier: CascadeIdentifier, markType: MessageMarkType):
+        url = f'{self.base_url}/api/v1/markMessage/{identifier.type}/{identifier.id}'
         payload = {'markType': markType.value if hasattr(markType, 'value') else str(markType)}
         self.debug(f'MarkMessage payload: {payload}')
         return self.session.post(url, data=json.dumps(payload)).json()
 
-    def move(self, identifier: Identifier, moveParameters: MoveParameters, workflowConfiguration: WorkflowConfiguration=None):
-        url = f'{self.base_url}/api/v1/move/{identifier.asset_type}/{identifier.asset_id}'
+    def move(self, identifier: CascadeIdentifier, moveParameters: MoveParameters, workflowConfiguration: WorkflowConfiguration=None):
+        url = f'{self.base_url}/api/v1/move/{identifier.type}/{identifier.id}'
         payload = {'moveParameters': json.loads(moveParameters.toJson())}
         if workflowConfiguration:
             payload['workflowConfiguration'] = json.loads(workflowConfiguration.toJson())
@@ -222,23 +222,23 @@ class CascadeCMSRestDriver:
 
     def publish(self, publishInformation: PublishInformation):
         ident = publishInformation.identifier
-        url = f'{self.base_url}/api/v1/publish/{ident.asset_type}/{ident.asset_id}'
+        url = f'{self.base_url}/api/v1/publish/{ident.type}/{ident.id}'
         payload = {'publishInformation': json.loads(publishInformation.toJson())}
         self.debug(f'Publish payload: {payload}')
         return self.session.post(url, data=json.dumps(payload)).json()
 
-    def read(self, identifier: Identifier):
-        url = f'{self.base_url}/api/v1/read/{identifier.asset_type}/{identifier.asset_id}'
+    def read(self, identifier: CascadeIdentifier):
+        url = f'{self.base_url}/api/v1/read/{identifier.type}/{identifier.id}'
         self.debug(f'Reading asset at {url}')
         return self.session.get(url).json()
 
-    def readAccessRights(self, identifier: Identifier):
-        url = f'{self.base_url}/api/v1/readAccessRights/{identifier.asset_type}/{identifier.asset_id}'
+    def readAccessRights(self, identifier: CascadeIdentifier):
+        url = f'{self.base_url}/api/v1/readAccessRights/{identifier.type}/{identifier.id}'
         self.debug(f'Reading access rights at {url}')
         return self.session.get(url).json()
 
     def readAudits(self, auditParameters: AuditParameters):
-        url = f'{self.base_url}/api/v1/readAudits/{auditParameters.identifier.asset_type}/{auditParameters.identifier.asset_id}'
+        url = f'{self.base_url}/api/v1/readAudits/{auditParameters.identifier.type}/{auditParameters.identifier.id}'
         payload = {'auditParameters': json.loads(auditParameters.toJson())}
         self.debug(f'ReadAudits payload: {payload}')
         return self.session.post(url, data=json.dumps(payload)).json()
@@ -248,21 +248,20 @@ class CascadeCMSRestDriver:
         self.debug(f'Reading preferences at {url}')
         return self.session.get(url).json()
 
-    def readWorkflowInformation(self, identifier: Identifier):
-        url = f'{self.base_url}/api/v1/readWorkflowInformation/{identifier.asset_type}/{identifier.asset_id}'
+    def readWorkflowInformation(self, identifier: CascadeIdentifier):
+        url = f'{self.base_url}/api/v1/readWorkflowInformation/{identifier.type}/{identifier.id}'
         self.debug(f'ReadWorkflowInformation at {url}')
         return self.session.get(url).json()
 
-    def readWorkflowSettings(self, identifier: Identifier):
-        url = f'{self.base_url}/api/v1/readWorkflowSettings/{identifier.asset_type}/{identifier.asset_id}'
+    def readWorkflowSettings(self, identifier: CascadeIdentifier):
+        url = f'{self.base_url}/api/v1/readWorkflowSettings/{identifier.type}/{identifier.id}'
         self.debug(f'ReadWorkflowSettings at {url}')
         return self.session.get(url).json()
 
     def search(self, searchInformation: SearchInformation):
         url = f'{self.base_url}/api/v1/search'
-        payload = {'searchInformation': json.loads(searchInformation.toJson())}
-        self.debug(f'Search payload: {payload}')
-        return self.session.post(url, data=json.dumps(payload)).json()
+        self.debug(f'Search payload: {searchInformation.payload}')
+        return self.session.post(url, data=json.dumps(searchInformation.payload)).json()
 
     def sendMessage(self, message: Message):
         url = f'{self.base_url}/api/v1/sendMessage'

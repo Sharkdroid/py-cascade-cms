@@ -4,5 +4,7 @@ test/*
 .venv
 .devcontainer/
 ./src/cascadecmsdriver/.env
-./app/*
+./app
 ./build/
+quick.sh
+test.py

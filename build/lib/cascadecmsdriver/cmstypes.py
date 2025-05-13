@@ -3,6 +3,35 @@ from typing import Union
 from enum import Enum
 import json
 
+class CascadeWSDL(dict):
+    def __init__(self, wsdlResponse):
+        super().__init__(wsdlResponse)
+
+
+class CascadeIdentifier:
+    @staticmethod
+    def jsonToIdentifier(jsonObject):
+        if(type(jsonObject) is not dict):
+            return False
+        respFormat = {
+            "id":str(),
+            "type":str(),
+            "path":dict(),
+            "recycled":bool()
+        }
+        
+        if(respFormat.keys() != jsonObject.keys()):
+            return False
+        
+        for key in jsonObject.keys():
+            if type(jsonObject[key]) != type(respFormat[key]):
+                return False
+        
+        return True
+
+    def __init__(self, type, id):
+        self.type = type
+        self.id = id
 
 class Entity:
     pass
@@ -417,12 +446,6 @@ class Path:
         self.siteName = siteName
 
 
-class Identifier(JSONSerializable):
-    def __init__(self, assetId: str, asset_type: EntityType, path: Path = None, recycled: bool = None):
-        self.id = assetId
-        self.type = asset_type
-        self.path = path
-        self.recycled = recycled
 
 
 class InlineEditableField:
@@ -431,7 +454,7 @@ class InlineEditableField:
 
 
 class ContainerChildren:
-    def __init__(self, containerChildren: list[Identifier]):
+    def __init__(self, containerChildren: list[CascadeIdentifier]):
         pass
 
 
@@ -466,7 +489,7 @@ class AclEntry:
 
 
 class AccessRightsInformation:
-    def __init__(self, identifier: Identifier, aclEntries: list[AclEntry], allLevel: AllLevel):
+    def __init__(self, identifier: CascadeIdentifier, aclEntries: list[AclEntry], allLevel: AllLevel):
         pass
 
 
@@ -496,7 +519,7 @@ class AssetFactoryContainer:
 
 
 class Audit:
-    def __init__(self, user: str, action: AuditTypes, identifier: Identifier, date: datetime):
+    def __init__(self, user: str, action: AuditTypes, identifier: CascadeIdentifier, date: datetime):
         pass
 
 
@@ -540,7 +563,7 @@ class WorkflowStep:
 
 
 class Workflow:
-    def __init__(self, _id: str, name: str, Relatedentity: Identifier, Currentstep: str, Orderedsteps: list[WorkflowStep], Unorderedsteps: list[WorkflowStep], startDate: datetime, endDate: datetime, completedWorkflowEmailId: str, completedWorkflowEmailPath: str, notificationWorkflowEmailId: str, notificationWorkflowEmailPath: str):
+    def __init__(self, _id: str, name: str, Relatedentity: CascadeIdentifier, Currentstep: str, Orderedsteps: list[WorkflowStep], Unorderedsteps: list[WorkflowStep], startDate: datetime, endDate: datetime, completedWorkflowEmailId: str, completedWorkflowEmailPath: str, notificationWorkflowEmailId: str, notificationWorkflowEmailPath: str):
         pass
 
 
@@ -565,7 +588,7 @@ class WorkflowEmailContainer:
 
 
 class WorkflowSettings:
-    def __init__(self, identifier: Identifier, workflowDefinitions: list[Identifier], inheritWorkflows: bool, requireWorkflow: bool, inheritedWorkflowDefinitions: list[Identifier]):
+    def __init__(self, identifier: CascadeIdentifier, workflowDefinitions: list[CascadeIdentifier], inheritWorkflows: bool, requireWorkflow: bool, inheritedWorkflowDefinitions: list[CascadeIdentifier]):
         pass
 
 
@@ -575,7 +598,7 @@ class EditWorkflowSettings:
 
 
 class ListSubscribers:
-    def __init__(self, identifier: Identifier):
+    def __init__(self, identifier: CascadeIdentifier):
         pass
 
 
@@ -595,7 +618,7 @@ class CronExpression:
 
 
 class PublishInformation:
-    def __init__(self, identifier: Identifier, destinations: list[Identifier], unpublish: bool, publishRelatedAssets: bool, publishRelatedpublishSet: bool, scheduledDate: datetime):
+    def __init__(self, identifier: CascadeIdentifier, destinations: list[CascadeIdentifier], unpublish: bool, publishRelatedAssets: bool, publishRelatedpublishSet: bool, scheduledDate: datetime):
         pass
 
 
@@ -605,7 +628,7 @@ class Publish:
 
 
 class PublishSet:
-    def __init__(self, _id: str, name: str, parentContainerId: str, parentContainerPath: str, path: str, siteId: str, siteName: str, files: list[Identifier], folders: list[Identifier], pages: list[Identifier], useScheduledPublishing: bool, scheduledPublishDestinationMode: ScheduledDestinationMode, scheduledPublishDestinations: list[Identifier], timeToPublish: time, choice: Union[PublishIntervalHours, PublishDaysOfWeek, CronExpression], sendReportToUsers: str, sendReportToGroups: str, sendReportOnErrorOnly: bool):
+    def __init__(self, _id: str, name: str, parentContainerId: str, parentContainerPath: str, path: str, siteId: str, siteName: str, files: list[CascadeIdentifier], folders: list[CascadeIdentifier], pages: list[CascadeIdentifier], useScheduledPublishing: bool, scheduledPublishDestinationMode: ScheduledDestinationMode, scheduledPublishDestinations: list[CascadeIdentifier], timeToPublish: time, choice: Union[PublishIntervalHours, PublishDaysOfWeek, CronExpression], sendReportToUsers: str, sendReportToGroups: str, sendReportOnErrorOnly: bool):
         pass
 
 
@@ -665,7 +688,7 @@ class Symlink:
 
 
 class AuditParameters:
-    def __init__(self, identifier: Identifier, username: str, groupname: str, roleName: str, startDate: datetime, endDate: datetime, auditType: AuditTypes):
+    def __init__(self, identifier: CascadeIdentifier, username: str, groupname: str, roleName: str, startDate: datetime, endDate: datetime, auditType: AuditTypes):
         pass
 
 
@@ -690,12 +713,12 @@ class Block:
 ### BEGIN OPERATIONS ###
 
 class Audit:
-    def __init__(self, user: str, action: AuditTypes, identifier: Identifier, date: datetime):
+    def __init__(self, user: str, action: AuditTypes, identifier: CascadeIdentifier, date: datetime):
         pass
 
 
 class CheckIn(JSONSerializable):
-    def __init__(self, identifier: Identifier, comments: str):
+    def __init__(self, identifier: CascadeIdentifier, comments: str):
         self.checkInRequest = {
             'identifier': identifier.toJson(),
             'comments': comments
@@ -703,21 +726,21 @@ class CheckIn(JSONSerializable):
 
 
 class CheckOut(JSONSerializable):
-    def __init__(self, identifier: Identifier):
+    def __init__(self, identifier: CascadeIdentifier):
         self.checkOutRequest = {
             'identifier': identifier.toJson()
         }
 
 
 class CopyParameters():
-    def __init__(self, destinationContainerIdentifier: Identifier, doWorkflow: bool, newName: str):
+    def __init__(self, destinationContainerIdentifier: CascadeIdentifier, doWorkflow: bool, newName: str):
         self.destinationContainerIdentifier = destinationContainerIdentifier
         self.doWorkflow = doWorkflow
         self.newName = newName
 
 
 class Copy(JSONSerializable):
-    def __init__(self, identifier: Identifier, copyParameters: CopyParameters, workflowConfiguration: WorkflowConfiguration):
+    def __init__(self, identifier: CascadeIdentifier, copyParameters: CopyParameters, workflowConfiguration: WorkflowConfiguration):
 
         self.copyRequest = {
             'identifier': identifier.toJson(),
@@ -732,12 +755,12 @@ class Create:
 
 
 class DeleteParameters:
-    def __init__(self, unpublish: bool, destinations: list[Identifier], doWorkflow: bool):
+    def __init__(self, unpublish: bool, destinations: list[CascadeIdentifier], doWorkflow: bool):
         pass
 
 
 class Delete:
-    def __init__(self, workflowConfiguration: WorkflowConfiguration, identifier: Identifier, deleteParameters: DeleteParameters):
+    def __init__(self, workflowConfiguration: WorkflowConfiguration, identifier: CascadeIdentifier, deleteParameters: DeleteParameters):
         pass
 
 
@@ -752,27 +775,27 @@ class EditAccessRights:
 
 
 class MoveParameters:
-    def __init__(self, unpublish: bool, destinations: list[Identifier], destinationContainerIdentifier: Identifier, doWorkflow: bool, newName: str):
+    def __init__(self, unpublish: bool, destinations: list[CascadeIdentifier], destinationContainerIdentifier: CascadeIdentifier, doWorkflow: bool, newName: str):
         pass
 
 
 class Move:
-    def __init__(self, identifier: Identifier, moveParameters: MoveParameters, workflowConfiguration: WorkflowConfiguration):
+    def __init__(self, identifier: CascadeIdentifier, moveParameters: MoveParameters, workflowConfiguration: WorkflowConfiguration):
         pass
 
 
 class Read:
-    def __init__(self, identifier: Identifier):
+    def __init__(self, identifier: CascadeIdentifier):
         pass
 
 
 class ReadAccessRights:
-    def __init__(self, identifier: Identifier):
+    def __init__(self, identifier: CascadeIdentifier):
         pass
 
 
 class ReadWorkflowSettings:
-    def __init__(self, identifier: Identifier):
+    def __init__(self, identifier: CascadeIdentifier):
         pass
 
 
@@ -791,7 +814,7 @@ class SiteCopy:
 
 
 class CheckOutResult:
-    def __init__(self, success: str, message: str, Workingcopyidentifier: Identifier):
+    def __init__(self, success: str, message: str, Workingcopyidentifier: CascadeIdentifier):
         pass
 
 
@@ -806,7 +829,7 @@ class EditPreferenceResult:
 
 
 class ListEditorConfigurationsResult:
-    def __init__(self, success: str, message: str, editorConfigurations: list[Identifier]):
+    def __init__(self, success: str, message: str, editorConfigurations: list[CascadeIdentifier]):
         pass
 
 
@@ -816,12 +839,12 @@ class ListMessagesResult:
 
 
 class ListSitesResult:
-    def __init__(self, success: str, message: str, sites: list[Identifier]):
+    def __init__(self, success: str, message: str, sites: list[CascadeIdentifier]):
         pass
 
 
 class ListSubscribersResult:
-    def __init__(self, success: str, message: str, subscribers: list[Identifier], manualSubscribers: list[Identifier]):
+    def __init__(self, success: str, message: str, subscribers: list[CascadeIdentifier], manualSubscribers: list[CascadeIdentifier]):
         pass
 
 
@@ -831,7 +854,7 @@ class OperationResult:
 
 
 class SearchMatches:
-    def __init__(self, searchMatches: list[Identifier]):
+    def __init__(self, searchMatches: list[CascadeIdentifier]):
         pass
 
 
@@ -917,7 +940,7 @@ class ContaineredAsset:
 
 
 class ContentTypePageConfiguration:
-    def __init__(self, pageConfigurationId: str, pageConfigurationName: str, Publishmode: ContentTypePageConfigurationPublishMode, destinations: list[Identifier]):
+    def __init__(self, pageConfigurationId: str, pageConfigurationName: str, Publishmode: ContentTypePageConfigurationPublishMode, destinations: list[CascadeIdentifier]):
         pass
 
 
@@ -947,7 +970,7 @@ class Databasetransport:
 
 
 class Destination:
-    def __init__(self, _id: str, name: str, parentContainerId: str, parentContainerPath: str, TransportId: str, Transportpath: str, applicableGroups: str, Directory: str, Enabled: bool, Checkedbydefault: bool, Publishascii: bool, useScheduledPublishing: bool, scheduledPublishDestinationMode: ScheduledDestinationMode, scheduledPublishDestinations: list[Identifier], timeToPublish: time, choice: Union[PublishIntervalHours, PublishDaysOfWeek, CronExpression], sendReportToUsers: str, sendReportToGroups: str, sendReportOnErrorOnly: bool, Weburl: str, extensionsToStrip: str, siteId: str, siteName: str):
+    def __init__(self, _id: str, name: str, parentContainerId: str, parentContainerPath: str, TransportId: str, Transportpath: str, applicableGroups: str, Directory: str, Enabled: bool, Checkedbydefault: bool, Publishascii: bool, useScheduledPublishing: bool, scheduledPublishDestinationMode: ScheduledDestinationMode, scheduledPublishDestinations: list[CascadeIdentifier], timeToPublish: time, choice: Union[PublishIntervalHours, PublishDaysOfWeek, CronExpression], sendReportToUsers: str, sendReportToGroups: str, sendReportOnErrorOnly: bool, Weburl: str, extensionsToStrip: str, siteId: str, siteName: str):
         pass
 
 
@@ -1066,23 +1089,16 @@ class Scriptformat:
         pass
 
 
-class SearchFieldString:
-    pass
-
-
-class SearchFields:
-    def __init__(self, searchField: list[SearchFieldString]):
-        pass
-
-
-class SearchTypes:
-    def __init__(self, searchtypes: list[EntityType]):
-        pass
-
-
 class SearchInformation:
-    def __init__(self, Searchterms: str, siteId: str, siteName: str, searchFields: SearchFields, Searchtypes: SearchTypes):
-        pass
+    def __init__(self, Searchterms: str, searchFields: list[str], Searchtypes: list[str]):
+        
+        self.payload = {
+            "searchInformation" : {
+                "searchTerms": Searchterms,
+                "searchFields": searchFields,
+                "searchTypes": Searchtypes
+            }
+        }
 
 
 class SharedField:
@@ -1101,7 +1117,7 @@ class PublishDaysOfWeek:
 
 
 class Site:
-    def __init__(self, _id: str, name: str, url: str, extensionsToStrip: str, defaultMetadataSetId: str, defaultMetadataSetPath: str, siteAssetFactoryContainerId: str, siteAssetFactoryContainerPath: str, defaultEditorConfigurationId: str, defaultEditorConfigurationPath: str, siteStartingPageId: str, siteStartingPagePath: str, siteStartingPageRecycled: bool, roleAssignments: list[RoleAssignment], useScheduledPublishing: bool, scheduledPublishDestinationMode: ScheduledDestinationMode, scheduledPublishDestinations: list[Identifier], timeToPublish: time,  choice: Union[PublishIntervalHours, PublishDaysOfWeek, CronExpression], sendReportToUsers: str, sendReportToGroups: str, sendReportOnErrorOnly: bool, recycleBinExpiration: RecycleBinExpiration, unpublishExpiration: bool, linkCheckerEnabled: bool, externalLinkCheckOnPublish: bool, inheritDataChecksEnabled: bool, spellcheckEnabled: bool, linkCheckEnabled: bool, accessibilityCheckEnabled: bool, inheritNamingRules: bool, namingRuleCase: NamingRuleCase, namingRuleSpacing: NamingRuleSpacing, namingRuleAssets: list[NamingRuleAsset], AccessibilityCheckerEnabled: bool, siteImproveIntegrationEnabled: bool, siteImproveUrl: str, widenDamIntegrationEnabled: bool, widenDamIntegrationCategory: str, webdamDamIntegrationEnabled: bool, rootFolderId: str, rootAssetFactoryContainerId: str, rootPageConfigurationSetContainerId: str, rootContentTypeContainerId: str, rootConnectorContainerId: str, rootDataDefinitionContainerId: str, rootSharedFieldContainerId: str, rootMetaDatasetContainerId: str, rootPublishSetContainerId: str, rootSiteDestinationContainerId: str, rootTransportContainerId: str, rootWorkflowDefinitionContainerId: str, rootWorkflowEmailContainerId: str, linkRewriting: SiteLinkRewriting):
+    def __init__(self, _id: str, name: str, url: str, extensionsToStrip: str, defaultMetadataSetId: str, defaultMetadataSetPath: str, siteAssetFactoryContainerId: str, siteAssetFactoryContainerPath: str, defaultEditorConfigurationId: str, defaultEditorConfigurationPath: str, siteStartingPageId: str, siteStartingPagePath: str, siteStartingPageRecycled: bool, roleAssignments: list[RoleAssignment], useScheduledPublishing: bool, scheduledPublishDestinationMode: ScheduledDestinationMode, scheduledPublishDestinations: list[CascadeIdentifier], timeToPublish: time,  choice: Union[PublishIntervalHours, PublishDaysOfWeek, CronExpression], sendReportToUsers: str, sendReportToGroups: str, sendReportOnErrorOnly: bool, recycleBinExpiration: RecycleBinExpiration, unpublishExpiration: bool, linkCheckerEnabled: bool, externalLinkCheckOnPublish: bool, inheritDataChecksEnabled: bool, spellcheckEnabled: bool, linkCheckEnabled: bool, accessibilityCheckEnabled: bool, inheritNamingRules: bool, namingRuleCase: NamingRuleCase, namingRuleSpacing: NamingRuleSpacing, namingRuleAssets: list[NamingRuleAsset], AccessibilityCheckerEnabled: bool, siteImproveIntegrationEnabled: bool, siteImproveUrl: str, widenDamIntegrationEnabled: bool, widenDamIntegrationCategory: str, webdamDamIntegrationEnabled: bool, rootFolderId: str, rootAssetFactoryContainerId: str, rootPageConfigurationSetContainerId: str, rootContentTypeContainerId: str, rootConnectorContainerId: str, rootDataDefinitionContainerId: str, rootSharedFieldContainerId: str, rootMetaDatasetContainerId: str, rootPublishSetContainerId: str, rootSiteDestinationContainerId: str, rootTransportContainerId: str, rootWorkflowDefinitionContainerId: str, rootWorkflowEmailContainerId: str, linkRewriting: SiteLinkRewriting):
         pass
 
 
@@ -1116,7 +1132,7 @@ class StatusUpdateConnector:
 
 
 class Target:
-    def __init__(self, _id: str, name: str, parentTargetId: str, parentTargetPath: str, path: str, baseFolderId: str, baseFolderPath: str, outputExtension: str, cssClasses: str, cssFileId: str, cssFilePath: str, cssFileRecycled: bool, serializationType: SerializationType, Includexmldeclaration: bool, Includetargetpath: bool, removeBaseFolder: bool, useScheduledPublishing: bool, scheduledPublishDestinationMode: ScheduledDestinationMode, scheduledPublishDestinations: list[Identifier], timeToPublish: time, choice: Union[PublishIntervalHours, PublishDaysOfWeek, CronExpression], sendReportToUsers: str, sendReportToGroups: str, sendReportOnErrorOnly: bool, children: ContainerChildren):
+    def __init__(self, _id: str, name: str, parentTargetId: str, parentTargetPath: str, path: str, baseFolderId: str, baseFolderPath: str, outputExtension: str, cssClasses: str, cssFileId: str, cssFilePath: str, cssFileRecycled: bool, serializationType: SerializationType, Includexmldeclaration: bool, Includetargetpath: bool, removeBaseFolder: bool, useScheduledPublishing: bool, scheduledPublishDestinationMode: ScheduledDestinationMode, scheduledPublishDestinations: list[CascadeIdentifier], timeToPublish: time, choice: Union[PublishIntervalHours, PublishDaysOfWeek, CronExpression], sendReportToUsers: str, sendReportToGroups: str, sendReportOnErrorOnly: bool, children: ContainerChildren):
         pass
 
 
@@ -1141,7 +1157,7 @@ class Twitterfeedblock:
 
 
 class Unpublishparameters:
-    def __init__(self, unpublish: bool, destinations: list[Identifier]):
+    def __init__(self, unpublish: bool, destinations: list[CascadeIdentifier]):
         pass
 
 
@@ -1158,3 +1174,4 @@ class UserGroupIdentifier:
 class WordpressConnector:
     def __init__(self, _id: str, name: str, parentContainerId: str, parentContainerPath: str, path: str, siteId: str, siteName: str, auth1: str, auth2: str, url: str, verified: bool, verifiedDate: datetime, connectorParameters: list[ConnectorParameter], Connectorcontenttypelinks: list[ConnectorContentTypeLink]):
         pass
+

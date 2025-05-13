@@ -1,36 +1,5 @@
 from .driver import CascadeCMSRestDriver
-
-
-class CascadeWSDL(dict):
-    def __init__(self, wsdlResponse):
-        super().__init__(wsdlResponse)
-
-
-class CascadeIdentifier:
-
-    @staticmethod
-    def jsonToIdentifier(jsonObject):
-        if(type(jsonObject) is not dict):
-            return False
-        respFormat = {
-            "id":str(),
-            "type":str(),
-            "path":dict(),
-            "recycled":bool()
-        }
-        
-        if(respFormat.keys() != jsonObject.keys()):
-            return False
-        
-        for key in jsonObject.keys():
-            if type(jsonObject[key]) != type(respFormat[key]):
-                return False
-        
-        return True
-
-    def __init__(self, type, id):
-        self.type = type
-        self.id = id
+from .cmstypes import CascadeWSDL, CascadeIdentifier, SearchInformation
 
 
 class CascadeWrapper:
@@ -47,16 +16,25 @@ class CascadeWrapper:
         listSites = self._driver.listSites()
         return [CascadeIdentifier(type=s['type'],id=s['id']) for s in listSites["sites"]]
     
-    def parseSearch(self, searchTerm="", searchFields=[], searchTypes=[]):
-        payload = { 
-            "searchTerms":f"{searchTerm}/*",
-            "searchFields": searchFields,
-            "searchTypes": searchTypes
-        }
-        return self._driver.search(payload)["matches"]
+    def parseSearch(self, searchTerm="", searchFields=[], searchTypes=[], includeFileExtensions=()):
+        
+        payload = SearchInformation(searchTerm, searchFields, searchTypes)
 
-    def edit(self):
-        return
+        matches = self._driver.search(payload)["matches"]
+        if(len(matches) == 0):
+            return []
+        matches = CascadeIdentifier.jsonToIdentifier(matches)
+        matches = self.identifierToWSDL(matches)
+
+        if(len(includeFileExtensions) == 0):
+            return matches
+        # filters results based on the path of the file. Ex. If I only want image file types then the results should only be .png, .jpg
+        filtered = [match for match in matches if match['name'].endswith(includeFileExtensions)]
+        return filtered 
+
+    def edit(self, asset):
+        status = self._driver.edit(asset)
+        return status
 
     def readAndParse(self, objectType, id):
         response = self._driver.read_asset(objectType, id)

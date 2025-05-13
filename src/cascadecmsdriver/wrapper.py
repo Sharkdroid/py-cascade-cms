@@ -1,36 +1,5 @@
 from .driver import CascadeCMSRestDriver
-
-
-class CascadeWSDL(dict):
-    def __init__(self, wsdlResponse):
-        super().__init__(wsdlResponse)
-
-
-class CascadeIdentifier:
-
-    @staticmethod
-    def jsonToIdentifier(jsonObject):
-        if(type(jsonObject) is not dict):
-            return False
-        respFormat = {
-            "id":str(),
-            "type":str(),
-            "path":dict(),
-            "recycled":bool()
-        }
-        
-        if(respFormat.keys() != jsonObject.keys()):
-            return False
-        
-        for key in jsonObject.keys():
-            if type(jsonObject[key]) != type(respFormat[key]):
-                return False
-        
-        return True
-
-    def __init__(self, type, id):
-        self.type = type
-        self.id = id
+from .cmstypes import CascadeWSDL, CascadeIdentifier, SearchInformation
 
 
 class CascadeWrapper:
@@ -40,23 +9,33 @@ class CascadeWrapper:
         driver.base_url = environmentVariable["cascade_url"]
         self._driver = driver    
     
+    def jsonToIdentifier(self, jsonList):
+        return [CascadeIdentifier(type=json['type'], id=json['id']) for json in jsonList if(CascadeIdentifier.isIdentifer(json))]
+
     def identifierToWSDL(self, identifierList, only=[]):
-        return [self.readAndParse(objectType=identiferNode.type, id=identiferNode.id) for identiferNode in identifierList if identiferNode.type in only]
+        return [self.readAndParse(objectType=identiferNode.type, id=identiferNode.id) for identiferNode in identifierList if identiferNode.type in only or len(only) == 0]
 
     def convertListSitesToIdentifier(self):
         listSites = self._driver.listSites()
-        return [CascadeIdentifier(type=s['type'],id=s['id']) for s in listSites["sites"]]
+        return self.jsonToIdentifier(listSites["sites"])
     
-    def parseSearch(self, searchTerm="", searchFields=[], searchTypes=[]):
-        payload = { 
-            "searchTerms":f"{searchTerm}/*",
-            "searchFields": searchFields,
-            "searchTypes": searchTypes
-        }
-        return self._driver.search(payload)["matches"]
+    def parseSearch(self, searchTerm="", searchFields=[], searchTypes=[], includeFileExtensions=()):
+        
+        payload = SearchInformation(searchTerm, searchFields, searchTypes)
 
-    def edit(self):
-        return
+        matches = self._driver.search(payload)["matches"]
+        matches = self.jsonToIdentifier(matches)
+        matches = self.identifierToWSDL(matches)
+
+        if(len(includeFileExtensions) == 0):
+            return matches
+        # filters results based on the path of the file. Ex. If I only want image file types then the results should only be .png, .jpg
+        filtered = [match for match in matches if match['name'].endswith(includeFileExtensions)]
+        return filtered 
+
+    def edit(self, asset):
+        status = self._driver.edit(asset)
+        return status
 
     def readAndParse(self, objectType, id):
         response = self._driver.read_asset(objectType, id)
@@ -66,7 +45,7 @@ class CascadeWrapper:
         
         #convert possible cascade identifiers into CascadeIdentifer class
         for (propertyName, propertyValue) in response.items():
-            if(type(propertyValue) is list and len(propertyValue) > 0):
-                response[propertyName] = [CascadeIdentifier(type=child["type"], id=child["id"]) for child in propertyValue if(CascadeIdentifier.jsonToIdentifier(child))]
+            if(type(propertyValue) is list and len(propertyValue) > 0 and type(propertyValue[0]) is dict):
+                response[propertyName] = [CascadeIdentifier(type=child["type"], id=child["id"]) for child in propertyValue if(CascadeIdentifier.isIdentifer(child))]
 
         return CascadeWSDL(response)
