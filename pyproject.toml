@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cascade-cms"
+version = "2.0.0"
+description = "A typed, async REST client for Hannon Hill Cascade CMS"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"          # uses `Self`, `TypeAlias`, PEP 604 unions
+authors = [{ name = "..." }]
+dependencies = [
+    "aiohttp-client-cache[sqlite]",
+    "python-dotenv",
+    "pydantic>=2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-asyncio", "mypy", "ruff", "build", "twine"]
+
+[project.urls]
+Homepage = "https://github.com/<org>/py-cascade-cms"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cascade_cms"]
