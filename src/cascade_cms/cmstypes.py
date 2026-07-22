@@ -182,7 +182,11 @@ AuditTypes: TypeAlias = Literal[
     "move",
 ]
 
-# NOTE: DOES NOT CHECK IF THE ASSET IS ALREADY CHECKOUT ON CASCADE: ONLY TRACKS USAGE THROUGH LIBRARY
+# In-process ledger of asset "type/id" segments currently checked out via
+# this library's checkIn/checkOut operations. This is purely local
+# bookkeeping (toggled by set_checkedout) and is NOT synchronized with
+# Cascade's actual server-side lock state, so it cannot detect an asset
+# already checked out through another session or the Cascade UI.
 ALL_CHECKOUT_ASSETS: set[str] = set()
 
 
@@ -190,12 +194,19 @@ ALL_CHECKOUT_ASSETS: set[str] = set()
 
 
 def reformat_name(class_name: str):
+    """Lowercase the first letter of a class name (e.g. "NewAsset" -> "newAsset")."""
     if class_name[0].isupper():
         return class_name[0].lower() + class_name[1:]
     return class_name
 
 
 def set_checkedout(key: str):
+    """Toggle a checkout-segment key in the local checkout ledger.
+
+    Called once per checkIn/checkOut operation queued, so calling it twice
+    for the same key (once on checkOut, once on the matching checkIn) flips
+    it back out again rather than accumulating duplicates.
+    """
     if key in ALL_CHECKOUT_ASSETS:
         ALL_CHECKOUT_ASSETS.discard(key)
     else:
@@ -275,6 +286,14 @@ class SimplePayload(BaseModel):
 
 
 class NewAsset(SimplePayload):
+    """Payload for the `create` operation.
+
+    Requires exactly one of `site_name`/`site_id` and exactly one of
+    `parent_folder_path`/`parent_folder_id` (enforced by
+    `_check_required_alternatives`). Extra fields are allowed and passed
+    through, since asset-type-specific properties vary per `asset_type`.
+    """
+
     model_config = ConfigDict(
         extra="allow",
         validate_by_name=True,
@@ -320,6 +339,12 @@ class NewAsset(SimplePayload):
 
 
 class IdentifierType(BaseModel):
+    """Resolved reference to a Cascade asset: its UUID, type, and optional path info.
+
+    This is the "id-based" counterpart to `Path` (which references an
+    asset by site + path string instead); see `resolve_identifier`.
+    """
+
     model_config = ConfigDict(
         frozen=True,
         extra="forbid",
@@ -469,6 +494,9 @@ class WorkflowSteps(TypedDict):
 
 
 class workflowInformation(BaseModel):
+    """Response from the `readWorkflowInformation` operation, describing an
+    asset's active workflow instance and its steps/actions."""
+
     model_config = ConfigDict(frozen=True)
 
     related_entity: Annotated[IdentifierType, Field(alias="relatedEntity")]
@@ -492,6 +520,18 @@ class Audit(TypedDict):
 
 
 class Asset:
+    """Dynamic wrapper around a raw Cascade asset JSON payload.
+
+    Cascade asset payloads have the shape `{"asset": {"<type>": {...}}}`
+    with a structure that varies per asset type, so unlike the Pydantic
+    models above this is a thin dict-backed wrapper rather than a fixed
+    schema: `_data` holds the inner `{...}` dict by reference, and
+    `__setattr__` only enforces that an existing field keeps its Python
+    type when reassigned (it does not validate against a schema).
+    `pageConfigurations`, if present, is parsed into `PageConfiguration`
+    models up front for convenient access via `get_page_configuration`.
+    """
+
     _asset_type: str
     _data: Dict[str, Any]
     _page_configs: list[PageConfiguration]
@@ -602,6 +642,8 @@ class Asset:
 
 
 class Message(SimplePayload):
+    """A Cascade inbox message, also used as the payload for mark/delete-message operations."""
+
     model_config = ConfigDict(populate_by_name=True)
 
     m_from: Annotated[str, Field(alias="from", exclude=True)]
@@ -621,12 +663,18 @@ class Message(SimplePayload):
 
 
 class CheckedOutAsset(BaseModel):
+    """Response from the `checkOut` operation, referencing the new working copy."""
+
     model_config = ConfigDict(frozen=True)
 
     workingCopyIdentifier: IdentifierType
 
 
 class ListElements(BaseModel):
+    """Response container for list-shaped endpoints (search, listSites, listMessages,
+    readAudits, listSubscribers), whose JSON key varies by endpoint but is always
+    aliased into `elements` via `AliasChoices`."""
+
     model_config = ConfigDict(frozen=True)
     elements: list[IdentifierType | Message | Audit] = Field(
         validation_alias=AliasChoices(
@@ -643,6 +691,8 @@ class ListElements(BaseModel):
 
 
 class CascadeError(BaseModel):
+    """Represents a Cascade API-level failure response (`{"success": false, "message": ...}`)."""
+
     model_config = ConfigDict(frozen=True)
     success: bool = False
     message: str
@@ -652,6 +702,8 @@ class CascadeError(BaseModel):
 
 
 class SearchInformation(SimplePayload):
+    """Payload for the `search` operation."""
+
     siteName: str
     searchTerms: str
     searchFields: List[FieldsSearchTypes] | List[Literal[""]] = Field(
@@ -663,17 +715,23 @@ class SearchInformation(SimplePayload):
 
 
 class preference(SimplePayload):
+    """Payload for the `editPreference` operation (a single user preference name/value)."""
+
     name: str
     value: Optional[str]
 
 
 class deleteParameters(SimplePayload):
+    """Payload for the `delete` operation."""
+
     do_workflow: bool = Field(alias="doWorkflow")
     destinations_identifiers: list[IdentifierType] = Field(alias="destinations")
     unpublish: bool = True
 
 
 class copyParameters(SimplePayload):
+    """Payload for the `copy` operation."""
+
     do_workflow: Annotated[bool, Field(alias="doWorkflow")]
     new_name: Annotated[str, Field(default=..., alias="newName")]
     destination_container_identifier: Annotated[
@@ -682,6 +740,8 @@ class copyParameters(SimplePayload):
 
 
 class moveParameters(SimplePayload):
+    """Payload for the `move` operation."""
+
     destinations: list[IdentifierType]
     do_workflow: bool = Field(alias="doWorkflow")
     destination_container_identifier: IdentifierType = Field(
@@ -692,19 +752,27 @@ class moveParameters(SimplePayload):
 
 
 class publishInformation(SimplePayload):
+    """Payload for the `publish` operation."""
+
     unpublish: bool = True
 
 
 class Comment(SimplePayload):
+    """Payload for the `checkIn` operation (a check-in comment)."""
+
     comment: str
 
 
 class SiteCopyParameter(SimplePayload):
+    """Payload for the `siteCopy` operation."""
+
     original_sitename: str | IdentifierType = Field(alias="originalSiteName")
     new_sitename: str = Field(alias="newSiteName")
 
 
 class workflowTransitionInformation(SimplePayload):
+    """Payload for the `performWorkflowTransition` operation."""
+
     workflow_identifier: Annotated[uuid.UUID, Field(alias="workflowId")]
     action_identifier: Annotated[str, Field(alias="actionIdentifier")]
     transition_comment: Optional[str] = Field(alias="transitionComment")
@@ -713,6 +781,8 @@ class workflowTransitionInformation(SimplePayload):
 
 
 class auditParameters(SimplePayload):
+    """Payload for the `readAudits` operation."""
+
     auditType: AuditTypes
     by_identifier: IdentifierType = Field(alias="identifier")
     by_username: Optional[str] = Field(default=None, alias="username")
@@ -816,6 +886,7 @@ asset_adapter = AssetAdapter()
 
 
 def serialize_payload(payload: Payloads) -> bytes:
+    """Serialize a request payload to JSON bytes, dispatching by payload type."""
     if isinstance(payload, Asset):
         return asset_adapter.dump_json(payload)
     elif isinstance(payload, NewAsset):
@@ -827,6 +898,14 @@ def serialize_payload(payload: Payloads) -> bytes:
 
 
 class ResponseParser(BaseModel, Generic[T]):
+    """Parses a raw response body, trying `CascadeError` first and falling
+    back to `serializer` on the expected success shape.
+
+    `_content` holds the parsed result (either a `CascadeError` or a `T`),
+    and `_cacheable` is set to True only when the success-path parse
+    succeeds, so error responses are never cached.
+    """
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     serializer: Optional[TypeAdapter[Any] | AssetAdapter] = None
@@ -853,20 +932,30 @@ class ResponseParser(BaseModel, Generic[T]):
 
 
 def parse_assets(raw: bytes) -> ResponseParser[Asset]:
+    """Parse a `read` response body into an `Asset`."""
     a = ResponseParser(raw=raw, serializer=asset_adapter)
     return a
 
 
 def parse_list_elements(raw: bytes) -> ResponseParser[ListElements]:
+    """Parse a list-shaped response body (search, listSites, etc.) into `ListElements`."""
     a = ResponseParser(raw, serializer=list_element_adapter)
     return a
 
 
 def parse_payloads(raw: bytes) -> ResponseParser[SimplePayload]:
+    """Parse a generic response body into the appropriate `SimplePayload` subclass."""
     return ResponseParser(raw=raw, serializer=simple_payload_adapter)
 
 
 def parse_create_asset(raw: bytes, pass_type: str) -> ResponseParser[IdentifierType]:
+    """Parse a `create` response, rebuilding an `IdentifierType` from `createdAssetId`.
+
+    Cascade's create response only returns the new asset's id, not its
+    type, so `pass_type` (the `asset_type` from the original create
+    payload, bound via `functools.partial` in `Operations.create`) is
+    injected to reconstruct a full `IdentifierType`.
+    """
     data = json.loads(raw)
     identifier_payload = {"id": data["createdAssetId"], "type": pass_type}
     return ResponseParser(
@@ -876,18 +965,22 @@ def parse_create_asset(raw: bytes, pass_type: str) -> ResponseParser[IdentifierT
 
 
 def parse_access_rights(raw: bytes) -> ResponseParser[accessRightsInformationPayload]:
+    """Parse a `readAccessRights` response body."""
     return ResponseParser(raw=raw, serializer=access_rights_adapter)
 
 
 def parse_workflow_settings(raw: bytes) -> ResponseParser[workflowSettingsPayload]:
+    """Parse a `readWorkflowSettings` response body."""
     return ResponseParser(raw=raw, serializer=workflow_settings_adapter)
 
 
 def parse_checked_out_asset(raw: bytes) -> ResponseParser[CheckedOutAsset]:
+    """Parse a `checkOut` response body."""
     return ResponseParser(raw=raw, serializer=checked_out_adapter)
 
 
 def parse_workflow_information(raw: bytes) -> ResponseParser[workflowInformation]:
+    """Parse a `readWorkflowInformation` response body."""
     return ResponseParser(raw=raw, serializer=workflow_info_adapter)
 
 

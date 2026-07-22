@@ -24,6 +24,13 @@ from dataclasses import dataclass, field
 
 @dataclass
 class CacheHandler:
+    """Thin wrapper around an aiohttp-client-cache SQLite backend.
+
+    Only GET responses are ever cached (enforced by the backend's
+    `allowed_methods` config) so repeated reads skip the network,
+    while POST/PUT requests always hit the server.
+    """
+
     cache_db: SQLiteBackend
 
     async def get_response(
@@ -51,6 +58,12 @@ class CacheHandler:
 
 @dataclass
 class RequestExecutor(Generic[T]):
+    """Represents a single queued HTTP request and how to parse its response.
+
+    Instances accumulate in `CascadeCMSRestDriver.pending_requests` and are
+    all executed concurrently by `process_executors()`.
+    """
+
     url: str
     method: Literal["GET", "POST", "PUT"]
     parser: Callable[..., ResponseParser[T]] = field(
@@ -66,6 +79,21 @@ class RequestExecutor(Generic[T]):
         cache: CacheHandler,
         logger: "OperationLogger | None" = None,
     ) -> T:
+        """Execute this request, using the cache for GETs when possible.
+
+        Checks the cache first; on a miss, performs the network request,
+        parses the response, and stores it in the cache if parsing marked
+        it cacheable. Concurrency across requests is bounded by `sem`.
+
+        Args:
+            session: Shared aiohttp session to issue the request on.
+            sem: Semaphore limiting concurrent in-flight requests.
+            cache: Cache handler used to short-circuit repeated GETs.
+            logger: Optional logger for recording request/response detail.
+
+        Returns:
+            The parsed response content (an asset, list, error, etc.).
+        """
         async with sem:
             payload_bytes: bytes | None = None
             if self.payload:
@@ -105,6 +133,7 @@ class RequestExecutor(Generic[T]):
                 return parsed_response._content  # type: ignore[return-value]
 
 
+# Default cache: SQLite-backed, GET-only, only caches 200 responses.
 DEFAULT_CACHECONFIG: SQLiteBackend = SQLiteBackend(
     cache_name=f"./cache/cache.sqlite",
     allowed_codes=(200,),
@@ -127,6 +156,20 @@ class CascadeCMSRestDriver:
         backendConfig: Dict[str, Any] | None,
         logger: OperationLogger | None = None,
     ):
+        """Set up the aiohttp session, event loop, and cache for this driver.
+
+        Creates a dedicated event loop that is reused for the lifetime of
+        this driver instance (rather than one per call), so all requests
+        and cache I/O run on the same loop.
+
+        Args:
+            apiKey: Cascade CMS API bearer token.
+            cascade_url: Base URL of the Cascade CMS instance (without
+                the `/api/v1` suffix, which is appended automatically).
+            backendConfig: kwargs forwarded to `SQLiteBackend` to override
+                the default cache config, or None to use the default.
+            logger: Optional logger for recording operations/errors.
+        """
 
         self._apiKey = apiKey
         self._logger = logger
@@ -134,7 +177,7 @@ class CascadeCMSRestDriver:
         self.pending_requests: list[RequestExecutor] = []
         self.request_buffer: list[CoroutineType[Any, Any, type[BaseModel]]] = []
         self.base_url = f"{cascade_url}/api/v1"
-        self.isFlushed = True
+        self.isFlushed = True  # NOTE: appears unused elsewhere in this codebase
 
         # Stores response object for debugging purpose. the ClientResponse object contains request infomation as well.
         self.request_response_info: CachedResponse | None = None
@@ -163,6 +206,17 @@ class CascadeCMSRestDriver:
         return "/".join([self.base_url, *map(str, segments)])
 
     async def process_executors(self) -> list[CascadeObjects]:
+        """Run all pending requests concurrently and collect their results.
+
+        Concurrency is bounded by `MAX_REQUESTS` via a semaphore. Requests
+        that raise a Python exception or return a `CascadeError` are logged
+        and excluded from the returned list, so only successfully parsed
+        results are returned (order is completion order, not submission
+        order, since results are gathered via `asyncio.as_completed`).
+
+        Returns:
+            The list of successfully parsed response objects.
+        """
         if self._logger:
             self._logger.set_total(len(self.pending_requests))
 
@@ -194,16 +248,18 @@ class CascadeCMSRestDriver:
                 processed_results.append(result)
         return processed_results
 
-    """
-    initializes headers for the connected session and acculmate all request tasks
-    """
-
     def _submitRequests(self) -> list[CascadeObjects]:
+        """Run the event loop to completion for all pending requests.
+
+        Blocks until every queued request finishes, then clears
+        `pending_requests` so the driver is ready for the next batch.
+        """
         res = self.eventLoop.run_until_complete(self.process_executors())
         self.pending_requests.clear()
         return res
 
     def close(self):
+        """Tear down the aiohttp session, cache DB, and event loop."""
         if getattr(self, "session", None) is not None and not getattr(
             self.session, "closed", False
         ):

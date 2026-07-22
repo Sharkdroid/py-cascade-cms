@@ -13,6 +13,14 @@ from typing import Dict, Any, List, Optional, Type, TypeVar, overload
 T = TypeVar("T")
 
 class CascadeWrapperBase:
+    """Context-manager entry point tying together the logger, REST driver,
+    and Operations builder for a single script/session.
+
+    Use as:
+        with CascadeWrapperBase(env_vars, config_vars) as cascade:
+            cascade.operations.read(identifier)
+            results = cascade.submit_requests()
+    """
 
     def __enter__(self):
         return self
@@ -23,6 +31,17 @@ class CascadeWrapperBase:
         configurationVariables: Dict[str, Any],
         debug: Dict[str, Any] | None = None,
     ):
+        """Initialize the logger, driver, and operations builder.
+
+        Args:
+            environmentVariables: Must contain "SERVER" (label used in log
+                output), "API_KEY" (Cascade bearer token), and
+                "CASCADE_URL" (base URL of the Cascade instance).
+            configurationVariables: kwargs forwarded to the driver's cache
+                backend (`SQLiteBackend`); pass an empty dict for defaults.
+            debug: Optional debug config for `OperationLogger` (verbose
+                nested logging); None enables normal/minimal logging.
+        """
         self._logger = OperationLogger(
             server=environmentVariables["SERVER"],
             debug_config=debug,
@@ -41,6 +60,11 @@ class CascadeWrapperBase:
         )
 
     def __exit__(self, exc_type, exc_value, traceback):
+        """Log session exit and close the driver, then propagate exceptions.
+
+        Any exception raised inside the `with` block (other than
+        `RuntimeWarning`) is re-raised after cleanup runs.
+        """
         try:
             self._logger.log_exit()
             return self._driver.close()

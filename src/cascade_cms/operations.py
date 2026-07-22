@@ -137,6 +137,7 @@ class Operations:
         identifiers: IdentifierType | Path | list[IdentifierType | Path],
         parser=parse_assets,
     ) -> Self:
+        """Queue GET `read/{type}/{id-or-path}` requests for one or more assets."""
         if not isinstance(identifiers, list):
             identifiers = [identifiers]
         for single_asset in identifiers:
@@ -161,6 +162,7 @@ class Operations:
         payload: deleteParameters | None = None,
         parser=None,
     ) -> Self:
+        """Queue a POST `delete/{type}/{id-or-path}` request for an asset."""
         url = self._driver._build_url(
             self.delete.__name__,
             *resolve_identifier(identifier),
@@ -177,6 +179,7 @@ class Operations:
         return self
 
     def create(self, payload: list[NewAsset] | NewAsset, parser=None) -> Self:
+        """Queue POST `create` requests for one or more new assets."""
         if not isinstance(payload, list):
             payload = [payload]
         for single_asset in payload:
@@ -198,6 +201,7 @@ class Operations:
         return self
 
     def edit(self, payload: list[Asset] | Asset, parser=None) -> Self:
+        """Queue POST `edit` requests to save one or more modified assets."""
         if not isinstance(payload, list):
             payload = [payload]
         for single_asset in payload:
@@ -220,6 +224,7 @@ class Operations:
         payload: copyParameters,
         parser=None,
     ) -> Self:
+        """Queue POST `copy/{type}/{id-or-path}` requests to copy one or more assets."""
         if not isinstance(identifier, list):
             identifier = [identifier]
         for single_identifier in identifier:
@@ -244,6 +249,7 @@ class Operations:
         payload: moveParameters,
         parser=None,
     ) -> Self:
+        """Queue POST `move/{type}/{id-or-path}` requests to move/rename one or more assets."""
         if not isinstance(identifier, list):
             identifier = [identifier]
         for single_identifier in identifier:
@@ -268,6 +274,7 @@ class Operations:
         payload: None | publishInformation = None,
         parser=None,
     ) -> Self:
+        """Queue POST `publish/{type}/{id-or-path}` requests for one or more assets."""
         if not isinstance(identifier, list):
             identifier = [identifier]
         for single_identifier in identifier:
@@ -291,6 +298,7 @@ class Operations:
         payload: SearchInformation,
         parser=parse_list_elements,
     ) -> Self:
+        """Queue a POST `search` request with the given search criteria."""
         assert isinstance(payload, SearchInformation)
         url = self._driver._build_url(self.search.__name__)
         request = RequestExecutor[ListElements](url, "POST", parser, payload)
@@ -307,6 +315,7 @@ class Operations:
         payload: Comment,
         parser=None,
     ) -> Self:
+        """Queue POST `checkIn/{type}/{id-or-path}` requests, toggling the local checkout ledger."""
         if not isinstance(identifier, list):
             identifier = [identifier]
         for single_asset in identifier:
@@ -329,6 +338,7 @@ class Operations:
         identifier: IdentifierType | Path | list[IdentifierType | Path],
         parser=parse_checked_out_asset,
     ) -> Self:
+        """Queue POST `checkOut/{type}/{id-or-path}` requests, toggling the local checkout ledger."""
         if not isinstance(identifier, list):
             identifier = [identifier]
         for single_asset in identifier:
@@ -347,6 +357,7 @@ class Operations:
         return self
 
     def listSites(self, parser=parse_list_elements) -> Self:
+        """Queue a GET `listSites` request to list all sites."""
         url = self._driver._build_url(self.listSites.__name__)
         request = RequestExecutor[ListElements](url, "GET", parser)
         self._driver.pending_requests.append(request)
@@ -360,6 +371,7 @@ class Operations:
         payload: auditParameters,
         parser=parse_list_elements,
     ) -> Self:
+        """Queue a GET `readAudits` request for audit log entries matching the given criteria."""
         url = self._driver._build_url(self.readAudits.__name__)
         request = RequestExecutor[ListElements](url, "GET", parser, payload)
         self._driver.pending_requests.append(request)
@@ -375,6 +387,7 @@ class Operations:
         identifier: IdentifierType | Path,
         parser=parse_list_elements,
     ) -> None:
+        """Queue a GET `listSubscribers/{type}/{id-or-path}` request for an asset."""
         url = self._driver._build_url(
             self.listSubscribers.__name__,
             *resolve_identifier(identifier),
@@ -398,6 +411,7 @@ class Operations:
         payload: SiteCopyParameter,
         parser=None,
     ) -> Self:
+        """Queue a POST `siteCopy` request to copy an entire site."""
         url = self._driver._build_url(self.siteCopy.__name__)
         request = RequestExecutor[CascadeError](url, "POST", payload=payload)
         self._driver.pending_requests.append(request)
@@ -411,6 +425,7 @@ class Operations:
         identifier: IdentifierType | Path,
         parser=parse_access_rights,
     ) -> Self:
+        """Queue a GET `readAccessRights/{type}/{id-or-path}` request for an asset."""
         url = self._driver._build_url(
             self.readAccessRights.__name__,
             *resolve_identifier(identifier),
@@ -430,6 +445,7 @@ class Operations:
         self,
         payload: accessRightsInformationPayload,
     ) -> Self:
+        """Queue a POST `editAccessRights` request to update an asset's ACL."""
         url = self._driver._build_url(self.editAccessRights.__name__)
         request = RequestExecutor[CascadeError](url, "POST", payload=payload)
         self._driver.pending_requests.append(request)
@@ -445,6 +461,7 @@ class Operations:
         identifier: IdentifierType | Path,
         parser=parse_workflow_settings,
     ) -> Self:
+        """Queue a GET `readWorkflowSettings/{type}/{id-or-path}` request for an asset."""
         url = self._driver._build_url(
             self.readWorkflowSettings.__name__,
             *resolve_identifier(identifier),
@@ -465,6 +482,7 @@ class Operations:
         payload: workflowSettingsPayload,
         parser=None,
     ) -> None:
+        """Queue a POST `editWorkflowSettings/{type}/{id}` request for an asset."""
         id_fields = payload.body["identifier"]
         url = self._driver._build_url(
             self.editWorkflowSettings.__name__,
@@ -482,6 +500,7 @@ class Operations:
                 )
 
     def listMessages(self, parser=parse_list_elements) -> Self:
+        """Queue a GET `listMessages` request to list inbox messages."""
         url = self._driver._build_url(self.listMessages.__name__)
         request = RequestExecutor[ListElements](url, "GET", parser)
         self._driver.pending_requests.append(request)
@@ -491,6 +510,7 @@ class Operations:
         return self
 
     def markMessage(self, message: Message) -> None:
+        """Queue a POST `markMessage` request to set a message's read/unread state."""
         url = self._driver._build_url(
             self.markMessage.__name__, message.__class__.__name__, message.m_id
         )
@@ -501,6 +521,7 @@ class Operations:
                 self._logger.log_operation("MARKMESSAGE", url, message, None, None)
 
     def deleteMessage(self, message: Message) -> None:
+        """Queue a POST `deleteMessage` request to delete a message."""
         url = self._driver._build_url(
             self.deleteMessage.__name__, message.__class__.__name__, message.m_id
         )
@@ -511,6 +532,7 @@ class Operations:
                 self._logger.log_operation("DELETEMESSAGE", url, None, None, None)
 
     def readPreferences(self, parser=parse_payloads) -> Self:
+        """Queue a GET `readPreferences` request for the current user's preferences."""
         url = self._driver._build_url(self.readPreferences.__name__)
         request = RequestExecutor[SimplePayload](url, "GET", parser)
         self._driver.pending_requests.append(request)
@@ -522,6 +544,7 @@ class Operations:
         return self
 
     def editPreference(self, payload: preference) -> None:
+        """Queue a POST `editPreference` request to update a user preference."""
         url = self._driver._build_url(self.editPreference.__name__)
         request = RequestExecutor[CascadeError](url, "POST", payload=payload)
         self._driver.pending_requests.append(request)
@@ -536,6 +559,7 @@ class Operations:
         identifier: IdentifierType | Path,
         parser=parse_workflow_information,
     ) -> Self:
+        """Queue a GET `readWorkflowInformation/{type}/{id-or-path}` request for an asset."""
         url = self._driver._build_url(
             self.readWorkflowInformation.__name__,
             *resolve_identifier(identifier),
@@ -557,6 +581,7 @@ class Operations:
         payload: workflowTransitionInformation,
         parser=None,
     ) -> Self:
+        """Queue a POST `performWorkflowTransition/{type}/{id-or-path}` request to advance an asset's workflow."""
         url = self._driver._build_url(
             self.performWorkflowTransition.__name__,
             *resolve_identifier(identifier),
