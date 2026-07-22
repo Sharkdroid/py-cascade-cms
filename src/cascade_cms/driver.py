@@ -1,4 +1,3 @@
-import logging
 from types import CoroutineType
 from typing import Any, Dict, Callable, Generic, Tuple, TypeVar
 
@@ -13,16 +12,14 @@ from .cmstypes import (
     Literal,
     ResponseParser,
     BaseModel,
+    CascadeError,
     CascadeObjects,
     serialize_payload,
     Payloads,
     ListElements,
 )
+from .operation_logger import OperationLogger
 from dataclasses import dataclass, field
-from pprint import pprint
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -60,12 +57,14 @@ class RequestExecutor(Generic[T]):
         default=lambda raw: ResponseParser(raw=raw)
     )
     payload: Payloads | None = None
+    identifier: Any = None
 
     async def fetch(
         self,
         session: ClientSession,
         sem: asyncio.Semaphore,
         cache: CacheHandler,
+        logger: "OperationLogger | None" = None,
     ) -> T:
         async with sem:
             payload_bytes: bytes | None = None
@@ -76,8 +75,9 @@ class RequestExecutor(Generic[T]):
             cache_key = cache.get_cache_key(self.method, self.url)
             already_cached = await cache.get_response(cache_key)
             if already_cached is not None:
-                print("this request already exists! Using cache..")
                 raw_data = await already_cached.read()
+                if logger:
+                    logger.log_response(raw_data)
                 parsed_response = self.parser(raw_data)
                 return parsed_response._content  # type: ignore[return-value]
 
@@ -88,6 +88,12 @@ class RequestExecutor(Generic[T]):
             ) as response:
                 response.raise_for_status()
                 raw_data: bytes = await response.read()
+                if logger:
+                    logger.log_response(raw_data)
+                    logger.log_network_headers(
+                        dict(response.request_info.headers),
+                        dict(response.headers),
+                    )
                 # parse raw data
                 parsed_response = self.parser(raw_data)
 
@@ -97,15 +103,6 @@ class RequestExecutor(Generic[T]):
                         cache_key,
                     )
                 return parsed_response._content  # type: ignore[return-value]
-
-
-def process_cascade_error(a, response_object: CachedResponse, debug=False):
-    if not a.success or a.message != None:
-        if debug:
-            print("---------------------- RESPONSE INFO -------------------------")
-            pprint(response_object.__dict__, indent=4)
-            print("---------------------- REQUEST INFO --------------------------")
-            pprint(response_object.request_info.__dict__, indent=4)
 
 
 DEFAULT_CACHECONFIG: SQLiteBackend = SQLiteBackend(
@@ -128,22 +125,19 @@ class CascadeCMSRestDriver:
         apiKey: str,
         cascade_url: str,
         backendConfig: Dict[str, Any] | None,
-        verbose=False,
+        logger: OperationLogger | None = None,
     ):
 
         self._apiKey = apiKey
+        self._logger = logger
 
         self.pending_requests: list[RequestExecutor] = []
         self.request_buffer: list[CoroutineType[Any, Any, type[BaseModel]]] = []
         self.base_url = f"{cascade_url}/api/v1"
         self.isFlushed = True
 
-        self.setup_logging(verbose)
-
         # Stores response object for debugging purpose. the ClientResponse object contains request infomation as well.
         self.request_response_info: CachedResponse | None = None
-
-        self.info("Initializing CascadeCMSDriver")
 
         # intializing event loop, for re-use for the rest of the session.
         self.eventLoop = asyncio.new_event_loop()
@@ -169,15 +163,35 @@ class CascadeCMSRestDriver:
         return "/".join([self.base_url, *map(str, segments)])
 
     async def process_executors(self) -> list[CascadeObjects]:
+        if self._logger:
+            self._logger.set_total(len(self.pending_requests))
+
         sem = asyncio.Semaphore(self.MAX_REQUESTS)
-        coros = [
-            executor.fetch(self.session, sem, self.cache)
-            for executor in self.pending_requests
-        ]
+
+        async def _run(executor: RequestExecutor) -> CascadeObjects | None:
+            try:
+                result = await executor.fetch(
+                    self.session, sem, self.cache, self._logger
+                )
+            except Exception as exc:
+                if self._logger:
+                    self._logger.log_python_error(exc)
+                    self._logger.log_progress(failed=True)
+                return None
+
+            failed = isinstance(result, CascadeError)
+            if failed and self._logger:
+                self._logger.log_cascade_error(result.message, executor.identifier)
+            if self._logger:
+                self._logger.log_progress(failed=failed)
+            return result
+
+        coros = [_run(executor) for executor in self.pending_requests]
         processed_results: list[CascadeObjects] = []
         for next_request in asyncio.as_completed(coros):
             result = await next_request
-            processed_results.append(result)
+            if result is not None:
+                processed_results.append(result)
         return processed_results
 
     """
@@ -202,21 +216,4 @@ class CascadeCMSRestDriver:
             self.eventLoop.run_until_complete(self.cache.cache_db.close())
 
         self.eventLoop.close()
-        self.info("Cleaning up resources")
         return True
-
-    def setup_logging(self, verbose=False):
-        base_logger = logging.getLogger(__class__.__name__)
-        handler = logging.StreamHandler()
-        formatter = logging.Formatter("%(prefix)s - %(message)s")
-        handler.setFormatter(formatter)
-        base_logger.addHandler(handler)
-        base_logger.setLevel(logging.DEBUG if verbose else logging.INFO)
-        self.prefix = {"prefix": "CascadeURLBuilder"}
-        self.logger = logging.LoggerAdapter(base_logger, self.prefix)
-
-    def info(self, msg):
-        self.logger.info(msg, extra=self.prefix)
-
-    def warn(self, msg):
-        self.logger.warning(msg, extra=self.prefix)

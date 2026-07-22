@@ -2,8 +2,10 @@ from dataclasses import dataclass, field
 from functools import partial
 from typing import Callable, Any, Self
 import asyncio
+from contextlib import nullcontext
 from concurrent.futures import Executor
 from .driver import CascadeCMSRestDriver, RequestExecutor
+from .operation_logger import OperationLogger
 from .cmstypes import (
     Asset,
     CascadeError,
@@ -58,6 +60,7 @@ class Operations:
     """
     _driver: CascadeCMSRestDriver
     _callbacks: list[Callable[[Any], Any]] = field(default_factory=list)
+    _logger: OperationLogger | None = None
 
     def then(self, callback_fn: Callable[[Any], Any] | list[Callable[[Any], Any]]) -> Self:
         """
@@ -105,20 +108,23 @@ class Operations:
         """
         for callback in self._callbacks:
             try:
-                if asyncio.iscoroutinefunction(callback):
-                    # Async callback: await it directly
-                    await callback(result)
-                else:
-                    # Sync callback: run in executor to avoid blocking the event loop
-                    # ProcessPoolExecutor: CPU-bound work (true parallelism, no GIL)
-                    # ThreadPoolExecutor: I/O-bound work (default, lightweight)
-                    loop = asyncio.get_event_loop()
-                    await loop.run_in_executor(executor, callback, result)
+                cb_name = getattr(callback, "__name__", repr(callback))
+                if self._logger:
+                    self._logger.log_callbacks([callback])
+                with self._logger.callback_scope(cb_name) if self._logger else nullcontext():
+                    if asyncio.iscoroutinefunction(callback):
+                        # Async callback: await it directly
+                        await callback(result)
+                    else:
+                        # Sync callback: run in executor to avoid blocking the event loop
+                        # ProcessPoolExecutor: CPU-bound work (true parallelism, no GIL)
+                        # ThreadPoolExecutor: I/O-bound work (default, lightweight)
+                        loop = asyncio.get_event_loop()
+                        await loop.run_in_executor(executor, callback, result)
             except Exception as e:
                 # Log and continue to next callback
-                self._driver.warn(
-                    f"Callback {callback.__name__} failed: {type(e).__name__}: {e}"
-                )
+                if self._logger:
+                    self._logger.log_python_error(e)
 
     # ===== EXISTING READ/WRITE OPERATIONS (unchanged) =====
     # Keep all the existing methods below as they are.
@@ -138,8 +144,15 @@ class Operations:
                 self.read.__name__,
                 *resolve_identifier(single_asset),
             )
-            request = RequestExecutor[Asset](url, "GET", parser)
+            request = RequestExecutor[Asset](
+                url, "GET", parser, identifier=single_asset
+            )
             self._driver.pending_requests.append(request)
+            if self._logger:
+                with self._logger.operation_scope("READ"):
+                    self._logger.log_operation(
+                        "READ", url, None, parser, single_asset
+                    )
         return self
 
     def delete(
@@ -152,8 +165,15 @@ class Operations:
             self.delete.__name__,
             *resolve_identifier(identifier),
         )
-        request = RequestExecutor[Asset](url, "POST", payload=payload)
+        request = RequestExecutor[Asset](
+            url, "POST", payload=payload, identifier=identifier
+        )
         self._driver.pending_requests.append(request)
+        if self._logger:
+            with self._logger.operation_scope("DELETE"):
+                self._logger.log_operation(
+                    "DELETE", url, payload, parser, identifier
+                )
         return self
 
     def create(self, payload: list[NewAsset] | NewAsset, parser=None) -> Self:
@@ -164,12 +184,17 @@ class Operations:
             # Bind asset_type NOW while we have it
             bound_parser = partial(parse_create_asset, pass_type=single_asset.asset_type)
             request = RequestExecutor[IdentifierType](
-                url, 
-                "POST", 
-                payload=single_asset, 
+                url,
+                "POST",
+                payload=single_asset,
                 parser=bound_parser  # This now only expects (raw)
             )
             self._driver.pending_requests.append(request)
+            if self._logger:
+                with self._logger.operation_scope("CREATE"):
+                    self._logger.log_operation(
+                        "CREATE", url, single_asset, bound_parser, None
+                    )
         return self
 
     def edit(self, payload: list[Asset] | Asset, parser=None) -> Self:
@@ -177,8 +202,16 @@ class Operations:
             payload = [payload]
         for single_asset in payload:
             url = self._driver._build_url(self.edit.__name__)
-            request = RequestExecutor[Asset](url, "POST", payload=single_asset)
+            identifier = single_asset.get("path")
+            request = RequestExecutor[Asset](
+                url, "POST", payload=single_asset, identifier=identifier
+            )
             self._driver.pending_requests.append(request)
+            if self._logger:
+                with self._logger.operation_scope("EDIT"):
+                    self._logger.log_operation(
+                        "EDIT", url, single_asset, parser, identifier
+                    )
         return self
 
     def copy(
@@ -194,8 +227,15 @@ class Operations:
                 self.copy.__name__,
                 *resolve_identifier(single_identifier),
             )
-            request = RequestExecutor[SimplePayload](url, "POST", payload=payload)
+            request = RequestExecutor[SimplePayload](
+                url, "POST", payload=payload, identifier=single_identifier
+            )
             self._driver.pending_requests.append(request)
+            if self._logger:
+                with self._logger.operation_scope("COPY"):
+                    self._logger.log_operation(
+                        "COPY", url, payload, parser, single_identifier
+                    )
         return self
 
     def move(
@@ -211,8 +251,15 @@ class Operations:
                 self.move.__name__,
                 *resolve_identifier(single_identifier),
             )
-            request = RequestExecutor[SimplePayload](url, "POST", payload=payload)
+            request = RequestExecutor[SimplePayload](
+                url, "POST", payload=payload, identifier=single_identifier
+            )
             self._driver.pending_requests.append(request)
+            if self._logger:
+                with self._logger.operation_scope("MOVE"):
+                    self._logger.log_operation(
+                        "MOVE", url, payload, parser, single_identifier
+                    )
         return self
 
     def publish(
@@ -228,8 +275,15 @@ class Operations:
                 self.publish.__name__,
                 *resolve_identifier(single_identifier),
             )
-            request = RequestExecutor[CascadeError](url, "POST", payload=payload)
+            request = RequestExecutor[CascadeError](
+                url, "POST", payload=payload, identifier=single_identifier
+            )
             self._driver.pending_requests.append(request)
+            if self._logger:
+                with self._logger.operation_scope("PUBLISH"):
+                    self._logger.log_operation(
+                        "PUBLISH", url, payload, parser, single_identifier
+                    )
         return self
 
     def search(
@@ -241,6 +295,9 @@ class Operations:
         url = self._driver._build_url(self.search.__name__)
         request = RequestExecutor[ListElements](url, "POST", parser, payload)
         self._driver.pending_requests.append(request)
+        if self._logger:
+            with self._logger.operation_scope("SEARCH"):
+                self._logger.log_operation("SEARCH", url, payload, parser, None)
         return self
 
     # -------Asset Controls-------
@@ -256,8 +313,15 @@ class Operations:
             segments = resolve_identifier(single_asset)
             set_checkedout("/".join(segments))
             url = self._driver._build_url(self.checkIn.__name__, *segments)
-            request = RequestExecutor[CascadeError](url, "POST", payload=payload)
+            request = RequestExecutor[CascadeError](
+                url, "POST", payload=payload, identifier=single_asset
+            )
             self._driver.pending_requests.append(request)
+            if self._logger:
+                with self._logger.operation_scope("CHECKIN"):
+                    self._logger.log_operation(
+                        "CHECKIN", url, payload, parser, single_asset
+                    )
         return self
 
     def checkOut(
@@ -271,14 +335,24 @@ class Operations:
             segments = resolve_identifier(single_asset)
             set_checkedout("/".join(segments))
             url = self._driver._build_url(self.checkOut.__name__, *segments)
-            request = RequestExecutor[CheckedOutAsset](url, "POST", parser)
+            request = RequestExecutor[CheckedOutAsset](
+                url, "POST", parser, identifier=single_asset
+            )
             self._driver.pending_requests.append(request)
+            if self._logger:
+                with self._logger.operation_scope("CHECKOUT"):
+                    self._logger.log_operation(
+                        "CHECKOUT", url, None, parser, single_asset
+                    )
         return self
 
     def listSites(self, parser=parse_list_elements) -> Self:
         url = self._driver._build_url(self.listSites.__name__)
         request = RequestExecutor[ListElements](url, "GET", parser)
         self._driver.pending_requests.append(request)
+        if self._logger:
+            with self._logger.operation_scope("LISTSITES"):
+                self._logger.log_operation("LISTSITES", url, None, parser, None)
         return self
 
     def readAudits(
@@ -289,6 +363,11 @@ class Operations:
         url = self._driver._build_url(self.readAudits.__name__)
         request = RequestExecutor[ListElements](url, "GET", parser, payload)
         self._driver.pending_requests.append(request)
+        if self._logger:
+            with self._logger.operation_scope("READAUDITS"):
+                self._logger.log_operation(
+                    "READAUDITS", url, payload, parser, payload.by_identifier
+                )
         return self
 
     def listSubscribers(
@@ -304,8 +383,14 @@ class Operations:
             url,
             "GET",
             parser=parser,
+            identifier=identifier,
         )
         self._driver.pending_requests.append(request)
+        if self._logger:
+            with self._logger.operation_scope("LISTSUBSCRIBERS"):
+                self._logger.log_operation(
+                    "LISTSUBSCRIBERS", url, None, parser, identifier
+                )
         return
 
     def siteCopy(
@@ -316,6 +401,9 @@ class Operations:
         url = self._driver._build_url(self.siteCopy.__name__)
         request = RequestExecutor[CascadeError](url, "POST", payload=payload)
         self._driver.pending_requests.append(request)
+        if self._logger:
+            with self._logger.operation_scope("SITECOPY"):
+                self._logger.log_operation("SITECOPY", url, payload, parser, None)
         return self
 
     def readAccessRights(
@@ -327,8 +415,15 @@ class Operations:
             self.readAccessRights.__name__,
             *resolve_identifier(identifier),
         )
-        request = RequestExecutor[accessRightsInformationPayload](url, "GET", parser)
+        request = RequestExecutor[accessRightsInformationPayload](
+            url, "GET", parser, identifier=identifier
+        )
         self._driver.pending_requests.append(request)
+        if self._logger:
+            with self._logger.operation_scope("READACCESSRIGHTS"):
+                self._logger.log_operation(
+                    "READACCESSRIGHTS", url, None, parser, identifier
+                )
         return self
 
     def editAccessRights(
@@ -338,6 +433,11 @@ class Operations:
         url = self._driver._build_url(self.editAccessRights.__name__)
         request = RequestExecutor[CascadeError](url, "POST", payload=payload)
         self._driver.pending_requests.append(request)
+        if self._logger:
+            with self._logger.operation_scope("EDITACCESSRIGHTS"):
+                self._logger.log_operation(
+                    "EDITACCESSRIGHTS", url, payload, None, None
+                )
         return self
 
     def readWorkflowSettings(
@@ -349,8 +449,15 @@ class Operations:
             self.readWorkflowSettings.__name__,
             *resolve_identifier(identifier),
         )
-        request = RequestExecutor[workflowSettingsPayload](url, "GET", parser)
+        request = RequestExecutor[workflowSettingsPayload](
+            url, "GET", parser, identifier=identifier
+        )
         self._driver.pending_requests.append(request)
+        if self._logger:
+            with self._logger.operation_scope("READWORKFLOWSETTINGS"):
+                self._logger.log_operation(
+                    "READWORKFLOWSETTINGS", url, None, parser, identifier
+                )
         return self
 
     def editWorkflowSettings(
@@ -364,13 +471,23 @@ class Operations:
             id_fields.get_type,
             id_fields.get_id,
         )
-        request = RequestExecutor[CascadeError](url, "POST", payload=payload)
+        request = RequestExecutor[CascadeError](
+            url, "POST", payload=payload, identifier=id_fields
+        )
         self._driver.pending_requests.append(request)
+        if self._logger:
+            with self._logger.operation_scope("EDITWORKFLOWSETTINGS"):
+                self._logger.log_operation(
+                    "EDITWORKFLOWSETTINGS", url, payload, parser, id_fields
+                )
 
     def listMessages(self, parser=parse_list_elements) -> Self:
         url = self._driver._build_url(self.listMessages.__name__)
         request = RequestExecutor[ListElements](url, "GET", parser)
         self._driver.pending_requests.append(request)
+        if self._logger:
+            with self._logger.operation_scope("LISTMESSAGES"):
+                self._logger.log_operation("LISTMESSAGES", url, None, parser, None)
         return self
 
     def markMessage(self, message: Message) -> None:
@@ -379,6 +496,9 @@ class Operations:
         )
         request = RequestExecutor[CascadeError](url, "POST", payload=message)
         self._driver.pending_requests.append(request)
+        if self._logger:
+            with self._logger.operation_scope("MARKMESSAGE"):
+                self._logger.log_operation("MARKMESSAGE", url, message, None, None)
 
     def deleteMessage(self, message: Message) -> None:
         url = self._driver._build_url(
@@ -386,17 +506,30 @@ class Operations:
         )
         request = RequestExecutor[CascadeError](url, "POST")
         self._driver.pending_requests.append(request)
+        if self._logger:
+            with self._logger.operation_scope("DELETEMESSAGE"):
+                self._logger.log_operation("DELETEMESSAGE", url, None, None, None)
 
     def readPreferences(self, parser=parse_payloads) -> Self:
         url = self._driver._build_url(self.readPreferences.__name__)
         request = RequestExecutor[SimplePayload](url, "GET", parser)
         self._driver.pending_requests.append(request)
+        if self._logger:
+            with self._logger.operation_scope("READPREFERENCES"):
+                self._logger.log_operation(
+                    "READPREFERENCES", url, None, parser, None
+                )
         return self
 
     def editPreference(self, payload: preference) -> None:
         url = self._driver._build_url(self.editPreference.__name__)
         request = RequestExecutor[CascadeError](url, "POST", payload=payload)
         self._driver.pending_requests.append(request)
+        if self._logger:
+            with self._logger.operation_scope("EDITPREFERENCE"):
+                self._logger.log_operation(
+                    "EDITPREFERENCE", url, payload, None, None
+                )
 
     def readWorkflowInformation(
         self,
@@ -407,8 +540,15 @@ class Operations:
             self.readWorkflowInformation.__name__,
             *resolve_identifier(identifier),
         )
-        request = RequestExecutor[workflowInformation](url, "GET", parser)
+        request = RequestExecutor[workflowInformation](
+            url, "GET", parser, identifier=identifier
+        )
         self._driver.pending_requests.append(request)
+        if self._logger:
+            with self._logger.operation_scope("READWORKFLOWINFORMATION"):
+                self._logger.log_operation(
+                    "READWORKFLOWINFORMATION", url, None, parser, identifier
+                )
         return self
 
     def performWorkflowTransition(
@@ -421,6 +561,13 @@ class Operations:
             self.performWorkflowTransition.__name__,
             *resolve_identifier(identifier),
         )
-        request = RequestExecutor[CascadeError](url, "POST", payload=payload)
+        request = RequestExecutor[CascadeError](
+            url, "POST", payload=payload, identifier=identifier
+        )
         self._driver.pending_requests.append(request)
+        if self._logger:
+            with self._logger.operation_scope("PERFORMWORKFLOWTRANSITION"):
+                self._logger.log_operation(
+                    "PERFORMWORKFLOWTRANSITION", url, payload, parser, identifier
+                )
         return self

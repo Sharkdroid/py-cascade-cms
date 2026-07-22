@@ -13,6 +13,7 @@ def read_asset_and_create_placeholders() -> None:
     environment_variables = {
         "API_KEY": os.environ["CASCADE_API_KEY"],
         "CASCADE_URL": os.environ["CASCADE_URL"],
+        "SERVER": os.environ["SERVER"],
     }
     configuration_variables = {
         "cache_name": "./cache/cache.sqlite",
