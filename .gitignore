@@ -10,8 +10,12 @@ dist/
 .venv/
 venv/
 
+# Agents
+.claude/
+
 # Cache
 cache/
+.pytest_cache/
 
 # Environment / secrets
 .env
