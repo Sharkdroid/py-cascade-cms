@@ -8,7 +8,7 @@ from .driver import CascadeCMSRestDriver, RequestExecutor
 from .operation_logger import OperationLogger
 from .cmstypes import (
     Asset,
-    CascadeError,
+    CascadeSuccess,
     CheckedOutAsset,
     Comment,
     IdentifierType,
@@ -36,6 +36,7 @@ from .cmstypes import (
     workflowSettingsPayload,
     workflowTransitionInformation,
     parse_payloads,
+    parse_success,
     set_checkedout,
     parse_assets,
     parse_list_elements,
@@ -160,15 +161,15 @@ class Operations:
         self,
         identifier: IdentifierType | Path,
         payload: deleteParameters | None = None,
-        parser=None,
+        parser=parse_success,
     ) -> Self:
         """Queue a POST `delete/{type}/{id-or-path}` request for an asset."""
         url = self._driver._build_url(
             self.delete.__name__,
             *resolve_identifier(identifier),
         )
-        request = RequestExecutor[Asset](
-            url, "POST", payload=payload, identifier=identifier
+        request = RequestExecutor[CascadeSuccess](
+            url, "POST", parser, payload=payload, identifier=identifier
         )
         self._driver.pending_requests.append(request)
         if self._logger:
@@ -200,15 +201,15 @@ class Operations:
                     )
         return self
 
-    def edit(self, payload: list[Asset] | Asset, parser=None) -> Self:
+    def edit(self, payload: list[Asset] | Asset, parser=parse_success) -> Self:
         """Queue POST `edit` requests to save one or more modified assets."""
         if not isinstance(payload, list):
             payload = [payload]
         for single_asset in payload:
             url = self._driver._build_url(self.edit.__name__)
             identifier = single_asset.get("path")
-            request = RequestExecutor[Asset](
-                url, "POST", payload=single_asset, identifier=identifier
+            request = RequestExecutor[CascadeSuccess](
+                url, "POST", parser, payload=single_asset, identifier=identifier
             )
             self._driver.pending_requests.append(request)
             if self._logger:
@@ -222,7 +223,7 @@ class Operations:
         self,
         identifier: IdentifierType | Path | list[IdentifierType | Path],
         payload: copyParameters,
-        parser=None,
+        parser=parse_success,
     ) -> Self:
         """Queue POST `copy/{type}/{id-or-path}` requests to copy one or more assets."""
         if not isinstance(identifier, list):
@@ -232,8 +233,8 @@ class Operations:
                 self.copy.__name__,
                 *resolve_identifier(single_identifier),
             )
-            request = RequestExecutor[SimplePayload](
-                url, "POST", payload=payload, identifier=single_identifier
+            request = RequestExecutor[CascadeSuccess](
+                url, "POST", parser, payload=payload, identifier=single_identifier
             )
             self._driver.pending_requests.append(request)
             if self._logger:
@@ -247,7 +248,7 @@ class Operations:
         self,
         identifier: IdentifierType | Path | list[IdentifierType | Path],
         payload: moveParameters,
-        parser=None,
+        parser=parse_success,
     ) -> Self:
         """Queue POST `move/{type}/{id-or-path}` requests to move/rename one or more assets."""
         if not isinstance(identifier, list):
@@ -257,8 +258,8 @@ class Operations:
                 self.move.__name__,
                 *resolve_identifier(single_identifier),
             )
-            request = RequestExecutor[SimplePayload](
-                url, "POST", payload=payload, identifier=single_identifier
+            request = RequestExecutor[CascadeSuccess](
+                url, "POST", parser, payload=payload, identifier=single_identifier
             )
             self._driver.pending_requests.append(request)
             if self._logger:
@@ -272,7 +273,7 @@ class Operations:
         self,
         identifier: IdentifierType | Path | list[IdentifierType | Path],
         payload: None | publishInformation = None,
-        parser=None,
+        parser=parse_success,
     ) -> Self:
         """Queue POST `publish/{type}/{id-or-path}` requests for one or more assets."""
         if not isinstance(identifier, list):
@@ -282,8 +283,8 @@ class Operations:
                 self.publish.__name__,
                 *resolve_identifier(single_identifier),
             )
-            request = RequestExecutor[CascadeError](
-                url, "POST", payload=payload, identifier=single_identifier
+            request = RequestExecutor[CascadeSuccess](
+                url, "POST", parser, payload=payload, identifier=single_identifier
             )
             self._driver.pending_requests.append(request)
             if self._logger:
@@ -313,7 +314,7 @@ class Operations:
         self,
         identifier: IdentifierType | Path | list[IdentifierType | Path],
         payload: Comment,
-        parser=None,
+        parser=parse_success,
     ) -> Self:
         """Queue POST `checkIn/{type}/{id-or-path}` requests, toggling the local checkout ledger."""
         if not isinstance(identifier, list):
@@ -322,8 +323,8 @@ class Operations:
             segments = resolve_identifier(single_asset)
             set_checkedout("/".join(segments))
             url = self._driver._build_url(self.checkIn.__name__, *segments)
-            request = RequestExecutor[CascadeError](
-                url, "POST", payload=payload, identifier=single_asset
+            request = RequestExecutor[CascadeSuccess](
+                url, "POST", parser, payload=payload, identifier=single_asset
             )
             self._driver.pending_requests.append(request)
             if self._logger:
@@ -409,11 +410,11 @@ class Operations:
     def siteCopy(
         self,
         payload: SiteCopyParameter,
-        parser=None,
+        parser=parse_success,
     ) -> Self:
         """Queue a POST `siteCopy` request to copy an entire site."""
         url = self._driver._build_url(self.siteCopy.__name__)
-        request = RequestExecutor[CascadeError](url, "POST", payload=payload)
+        request = RequestExecutor[CascadeSuccess](url, "POST", parser, payload=payload)
         self._driver.pending_requests.append(request)
         if self._logger:
             with self._logger.operation_scope("SITECOPY"):
@@ -447,7 +448,9 @@ class Operations:
     ) -> Self:
         """Queue a POST `editAccessRights` request to update an asset's ACL."""
         url = self._driver._build_url(self.editAccessRights.__name__)
-        request = RequestExecutor[CascadeError](url, "POST", payload=payload)
+        request = RequestExecutor[CascadeSuccess](
+            url, "POST", parse_success, payload=payload
+        )
         self._driver.pending_requests.append(request)
         if self._logger:
             with self._logger.operation_scope("EDITACCESSRIGHTS"):
@@ -480,7 +483,7 @@ class Operations:
     def editWorkflowSettings(
         self,
         payload: workflowSettingsPayload,
-        parser=None,
+        parser=parse_success,
     ) -> None:
         """Queue a POST `editWorkflowSettings/{type}/{id}` request for an asset."""
         id_fields = payload.body["identifier"]
@@ -489,8 +492,8 @@ class Operations:
             id_fields.get_type,
             id_fields.get_id,
         )
-        request = RequestExecutor[CascadeError](
-            url, "POST", payload=payload, identifier=id_fields
+        request = RequestExecutor[CascadeSuccess](
+            url, "POST", parser, payload=payload, identifier=id_fields
         )
         self._driver.pending_requests.append(request)
         if self._logger:
@@ -514,7 +517,9 @@ class Operations:
         url = self._driver._build_url(
             self.markMessage.__name__, message.__class__.__name__, message.m_id
         )
-        request = RequestExecutor[CascadeError](url, "POST", payload=message)
+        request = RequestExecutor[CascadeSuccess](
+            url, "POST", parse_success, payload=message
+        )
         self._driver.pending_requests.append(request)
         if self._logger:
             with self._logger.operation_scope("MARKMESSAGE"):
@@ -525,7 +530,7 @@ class Operations:
         url = self._driver._build_url(
             self.deleteMessage.__name__, message.__class__.__name__, message.m_id
         )
-        request = RequestExecutor[CascadeError](url, "POST")
+        request = RequestExecutor[CascadeSuccess](url, "POST", parse_success)
         self._driver.pending_requests.append(request)
         if self._logger:
             with self._logger.operation_scope("DELETEMESSAGE"):
@@ -546,7 +551,9 @@ class Operations:
     def editPreference(self, payload: preference) -> None:
         """Queue a POST `editPreference` request to update a user preference."""
         url = self._driver._build_url(self.editPreference.__name__)
-        request = RequestExecutor[CascadeError](url, "POST", payload=payload)
+        request = RequestExecutor[CascadeSuccess](
+            url, "POST", parse_success, payload=payload
+        )
         self._driver.pending_requests.append(request)
         if self._logger:
             with self._logger.operation_scope("EDITPREFERENCE"):
@@ -579,15 +586,15 @@ class Operations:
         self,
         identifier: IdentifierType | Path,
         payload: workflowTransitionInformation,
-        parser=None,
+        parser=parse_success,
     ) -> Self:
         """Queue a POST `performWorkflowTransition/{type}/{id-or-path}` request to advance an asset's workflow."""
         url = self._driver._build_url(
             self.performWorkflowTransition.__name__,
             *resolve_identifier(identifier),
         )
-        request = RequestExecutor[CascadeError](
-            url, "POST", payload=payload, identifier=identifier
+        request = RequestExecutor[CascadeSuccess](
+            url, "POST", parser, payload=payload, identifier=identifier
         )
         self._driver.pending_requests.append(request)
         if self._logger:

@@ -282,7 +282,17 @@ class SimplePayload(BaseModel):
 
         """
         subclass_name = self.__class__.__name__
-        return {reformat_name(subclass_name): self.__dict__}
+        try:
+            fields_info = self.__pydantic_fields__  # Pydantic V3
+        except AttributeError:
+            fields_info = self.model_fields  # Pydantic V2
+
+        aliased = {
+            (fields_info[name].alias or name): value
+            for name, value in self.__dict__.items()
+            if name in fields_info
+        }
+        return {reformat_name(subclass_name): aliased}
 
 
 class NewAsset(SimplePayload):
@@ -355,6 +365,11 @@ class IdentifierType(BaseModel):
     asset_type: Annotated[AssetTypes, Field(default=..., alias="type")]
     recycled: Annotated[Optional[bool], Field(default=None)] = None
     path: Annotated[Optional[PathBase], Field(default=None)] = None
+
+    # Cascade rejects dashed UUIDs for identifiers - serialize as bare hex.
+    @field_serializer("identifier")
+    def serialize_identifier(self, value: uuid.UUID) -> str:
+        return value.hex
 
     # getters
     @property
@@ -568,6 +583,10 @@ class Asset:
                 )
         self._data[key] = value
 
+    @property
+    def asset_type(self) -> str:
+        return self._asset_type
+
     def get(self, key: str, default=None):
         """Access _data fields conveniently."""
         return self._data.get(key, default)
@@ -696,6 +715,13 @@ class CascadeError(BaseModel):
     model_config = ConfigDict(frozen=True)
     success: bool = False
     message: str
+
+
+class CascadeSuccess(BaseModel):
+    """Represents a Cascade API-level success response with no further data (`{"success": true}`)."""
+
+    model_config = ConfigDict(frozen=True)
+    success: bool = True
 
 
 # ----- Parameter Payloads (sent to specific endpoints) -----
@@ -842,6 +868,7 @@ access_rights_adapter = TypeAdapter(accessRightsInformationPayload)
 workflow_settings_adapter = TypeAdapter(workflowSettingsPayload)
 checked_out_adapter = TypeAdapter(CheckedOutAsset)
 workflow_info_adapter = TypeAdapter(workflowInformation)
+cascade_success_adapter = TypeAdapter(CascadeSuccess)
 
 
 # `Payloads` is hoisted out of the Type Aliases section (which the guide places
@@ -984,6 +1011,11 @@ def parse_workflow_information(raw: bytes) -> ResponseParser[workflowInformation
     return ResponseParser(raw=raw, serializer=workflow_info_adapter)
 
 
+def parse_success(raw: bytes) -> ResponseParser[CascadeSuccess]:
+    """Parse a bare `{"success": true}` response body from a write operation."""
+    return ResponseParser(raw=raw, serializer=cascade_success_adapter)
+
+
 # ===== TYPE ALIASES (Convenience types for type hints) =====
 
-CascadeObjects = ListElements | Payloads | CascadeError
+CascadeObjects = ListElements | Payloads | CascadeError | CascadeSuccess

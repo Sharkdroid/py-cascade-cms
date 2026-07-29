@@ -3,8 +3,8 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "cascade-cms"
-version = "2.0.0"
+name = "cascade-cms-rest"
+version = "2.0.2"
 description = "A typed, async REST client for Hannon Hill Cascade CMS"
 readme = "README.md"
 license = "MIT"
@@ -20,7 +20,7 @@ dependencies = [
 dev = ["pytest", "pytest-asyncio", "mypy", "ruff", "build", "twine"]
 
 [project.urls]
-Homepage = "https://github.com/<org>/py-cascade-cms"
+Homepage = "https://github.com/Sharkdroid/py-cascade-cms"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/cascade_cms"]

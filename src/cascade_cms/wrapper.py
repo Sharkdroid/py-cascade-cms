@@ -52,7 +52,7 @@ class CascadeWrapperBase:
             configurationVariables,
             logger=self._logger,
         )
-        self.operations = Operations(self._driver, logger=self._logger)
+        self.operations = Operations(self._driver, _logger=self._logger)
 
         self._logger.log_init(
             environmentVariables['CASCADE_URL'],
