@@ -4,12 +4,12 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cascade-cms-rest"
-version = "2.0.2"
+version = "2.0.3"
 description = "A typed, async REST client for Hannon Hill Cascade CMS"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"          # uses `Self`, `TypeAlias`, PEP 604 unions
-authors = [{ name = "..." }]
+authors = [{ name = "Keith Shark" }]
 dependencies = [
     "aiohttp-client-cache[sqlite]",
     "python-dotenv",

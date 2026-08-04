@@ -984,9 +984,15 @@ def parse_create_asset(raw: bytes, pass_type: str) -> ResponseParser[IdentifierT
     injected to reconstruct a full `IdentifierType`.
     """
     data = json.loads(raw)
-    identifier_payload = {"id": data["createdAssetId"], "type": pass_type}
-    return ResponseParser(
-        json.dumps(identifier_payload).encode(),
+    if data.get("createdAssetId") is not None: # we know that the creation succeeded
+        identifier_payload = {"id": data["createdAssetId"], "type": pass_type}
+    
+        return ResponseParser(
+            json.dumps(identifier_payload).encode(),
+            serializer=identifier_type_adapter,
+        )
+    return ResponseParser( # `createdAssetId` does NOT exist we know that its most likely a error
+        raw,
         serializer=identifier_type_adapter,
     )
 
