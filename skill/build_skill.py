@@ -78,6 +78,7 @@ def validate_templates() -> None:
     for template in templates:
         proc = subprocess.run(
             [sys.executable, str(VALIDATOR), str(template)],
+            check=False,
             capture_output=True,
             text=True,
         )
