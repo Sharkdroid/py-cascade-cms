@@ -17,10 +17,16 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "pytest-asyncio", "mypy", "ruff", "build", "twine"]
+dev = ["pytest", "pytest-asyncio", "mypy", "ruff", "build", "twine", "google-generativeai"]
 
 [project.urls]
 Homepage = "https://github.com/Sharkdroid/py-cascade-cms"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/cascade_cms"]
+
+[tool.ruff]
+# Verbatim snapshot of src/cascade_cms/, synced by skill/build_skill.py — it is
+# linted at its source, and diverging the copy to satisfy ruff would break the
+# byte-for-byte parity the bundle manifest checks.
+exclude = ["skill/cascade-script-writer/cascade_cms"]

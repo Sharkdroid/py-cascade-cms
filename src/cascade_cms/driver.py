@@ -1,15 +1,13 @@
+import asyncio
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from types import CoroutineType
 from typing import Any, Literal, TypeVar
 
-T = TypeVar("T")
-
-# from aiohttp_client_cache.session import CachedSession
-import asyncio
-from dataclasses import dataclass, field
-
 from aiohttp import ClientResponse, ClientSession
 from aiohttp_client_cache import SQLiteBackend
+
+# from aiohttp_client_cache.session import CachedSession
 from aiohttp_client_cache.response import CachedResponse
 
 from .cmstypes import (
@@ -21,6 +19,8 @@ from .cmstypes import (
     serialize_payload,
 )
 from .operation_logger import OperationLogger
+
+T = TypeVar("T")
 
 
 @dataclass
