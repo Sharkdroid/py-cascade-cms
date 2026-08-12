@@ -3,10 +3,8 @@ import uuid
 from typing import (
     Annotated,
     Any,
-    Generic,
     Literal,
     Self,
-    TypeAlias,
     TypedDict,
     TypeVar,
     cast,
@@ -33,14 +31,14 @@ from datetime import datetime
 
 # ----- TYPE ALIASES & HELPERS -----
 
-IdentityTypes: TypeAlias = Literal[
+type IdentityTypes = Literal[
     "group",
     "user",
     "role",
 ]
 
 
-AssetTypes: TypeAlias = Literal[
+type AssetTypes = Literal[
     # Asset Factories
     "assetfactory",
     "assetfactorycontainer",
@@ -116,7 +114,7 @@ AssetTypes: TypeAlias = Literal[
 ]
 
 
-FieldsSearchTypes: TypeAlias = Literal[
+type FieldsSearchTypes = Literal[
     # Basic fields
     "name",
     "path",
@@ -138,7 +136,7 @@ FieldsSearchTypes: TypeAlias = Literal[
 ]
 
 
-AuditTypes: TypeAlias = Literal[
+type AuditTypes = Literal[
     "login",
     "login_failed",
     "logout",
@@ -903,7 +901,7 @@ def serialize_payload(payload: Payloads) -> bytes:
 # ===== PARSER FRAMEWORK & RESPONSE PARSING =====
 
 
-class ResponseParser(BaseModel, Generic[T]):
+class ResponseParser[T](BaseModel):
     """Parses a raw response body, trying `CascadeError` first and falling
     back to `serializer` on the expected success shape.
 

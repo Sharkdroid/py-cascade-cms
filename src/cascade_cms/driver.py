@@ -1,6 +1,6 @@
 from collections.abc import Callable
 from types import CoroutineType
-from typing import Any, Generic, Literal, TypeVar
+from typing import Any, Literal, TypeVar
 
 T = TypeVar("T")
 
@@ -58,7 +58,7 @@ class CacheHandler:
 
 
 @dataclass
-class RequestExecutor(Generic[T]):
+class RequestExecutor[T]:
     """Represents a single queued HTTP request and how to parse its response.
 
     Instances accumulate in `CascadeCMSRestDriver.pending_requests` and are
