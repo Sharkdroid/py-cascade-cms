@@ -1,4 +1,5 @@
 # operation_logger.py
+import json
 import logging
 import sys
 import traceback
@@ -225,7 +226,12 @@ class OperationLogger:
         limit = self._config.get("response_line_limit", 8)
         divider = "=" * 25
         self._write(f"{pad}{divider} (RESPONSE) {divider}")
-        lines = raw.decode(errors="replace").splitlines()
+        text = raw.decode(errors="replace")
+        try:
+            text = json.dumps(json.loads(text), indent=2)
+        except ValueError:
+            pass
+        lines = text.splitlines()
         if limit == -1 or len(lines) <= limit:
             for line in lines:
                 self._write(f"{pad}{line}")

@@ -62,6 +62,8 @@ type AssetTypes = Literal[
     # Data Definitions
     "datadefinition",
     "datadefinitioncontainer",
+    "structureddatadefinition",
+    "structureddatadefinitioncontainer",
     # Destinations
     "destination",
     "sitedestinationcontainer",
