@@ -59,6 +59,10 @@ jobs:
           PAGES = "pages-repo"
           GEMINI_MODEL = "gemini-3.5-flash-lite"   # bump here if it changes
           WATCHED_FILES = ["src/cascade_cms/operations.py", "src/cascade_cms/cmstypes.py"]
+          # wrapper.py is stable infrastructure: watched separately from WATCHED_FILES
+          # because its methods aren't gated by doc_mapping.yml headings. Signature
+          # changes here are surfaced to Gemini to judge functional vs. cosmetic.
+          WRAPPER_FILE = "src/cascade_cms/wrapper.py"
 
           def fail(msg):
               print(f"::error::{msg}")
@@ -104,6 +108,19 @@ jobs:
                       classes[node.name] = class_fields(node)
               return functions, classes
 
+          def extract_docstrings(source):
+              """name -> docstring for top-level public function/method defs.
+              Only pulled for wrapper.py, and only spent on methods that get
+              escalated to the synthesis prompt -- not part of the cheap pass."""
+              if source is None:
+                  return {}
+              tree = ast.parse(source)
+              return {
+                  node.name: ast.get_docstring(node)
+                  for node in ast.walk(tree)
+                  if isinstance(node, ast.FunctionDef) and not node.name.startswith("_")
+              }
+
           # ---- load mapping ----
           try:
               with open(os.path.join(REPO, "doc_mapping.yml")) as f:
@@ -127,6 +144,23 @@ jobs:
               old_funcs.update(of); old_classes.update(oc)
               new_funcs.update(nf); new_classes.update(nc)
 
+          # ---- wrapper.py: signature-only drift, judged by Gemini for significance ----
+          wrapper_old_src = git_show("HEAD~1", WRAPPER_FILE)
+          wrapper_new_src = git_show("HEAD", WRAPPER_FILE)
+          try:
+              wrapper_old_funcs, _ = extract(wrapper_old_src)
+              wrapper_new_funcs, _ = extract(wrapper_new_src)
+          except SyntaxError as e:
+              fail(f"Could not parse {WRAPPER_FILE}: {e}")
+
+          wrapper_drift = {
+              name: {"old": wrapper_old_funcs.get(name), "new": new_sig}
+              for name, new_sig in wrapper_new_funcs.items()
+              if wrapper_old_funcs.get(name) != new_sig
+          }
+          # only fetched for the (usually small) subset later routed to synthesis
+          wrapper_docstrings = extract_docstrings(wrapper_new_src)
+
           # ---- find drifted methods (via mapping, so only watched surface area counts) ----
           drifted = []  # list of dicts: method, heading, kind, old, new
           for method, info in mapping["methods"].items():
@@ -149,13 +183,15 @@ jobs:
                           "old": old_fields, "new": new_fields,
                       })
 
-          if not drifted:
+          if not drifted and not wrapper_drift:
               print("No signature or payload-model drift detected. Nothing to do.")
               with open(os.environ["GITHUB_OUTPUT"], "a") as f:
                   f.write("has_changes=false\n")
               sys.exit(0)
 
-          print(f"Drift detected in {len(drifted)} item(s): {[d['method'] for d in drifted]}")
+          print(f"Drift detected in {len(drifted)} mapped item(s): {[d['method'] for d in drifted]}")
+          if wrapper_drift:
+              print(f"wrapper.py signature drift in: {list(wrapper_drift)}")
 
           # ---- pull current doc content once ----
           try:
@@ -207,7 +243,7 @@ jobs:
 
           Respond with ONLY a JSON object, no markdown fences, no commentary:
           {{"updated_section": "<full replacement markdown for this section>",
-            "changelog_entry": "<one line, e.g. '- \`{item['method']}\`: <what changed and why it matters>'"}}
+            "changelog_entry": "<one line, e.g. '- `{item['method']}`: <what changed and why it matters>'"}}
           """
               last_err = None
               for attempt in range(2):
@@ -223,6 +259,74 @@ jobs:
                       continue
               fail(f"Gemini did not return valid JSON for '{item['method']}' after retry: {last_err}")
 
+          def assess_wrapper_drift(drift):
+              """Cheap/lightweight pass, run once for every wrapper.py signature change:
+              signatures only, no docstrings. Classifies functional vs. cosmetic so the
+              caller can route functional methods on to the pricier synthesis prompt --
+              cosmetic ones (renames, docstring-only updates) stop here."""
+              prompt = f"""When comparing wrapper.py signatures:
+          - Classify each change as functional (new parameter behavior, changed return
+            type, removed method) or cosmetic (parameter rename, docstring-only update,
+            internal refactor with identical behavior).
+          - change_type must be one of: "parameter_rename", "return_type_change",
+            "behavior_change", "method_removed", "cosmetic".
+
+          Signature changes detected in wrapper.py (CascadeWrapperBase and friends):
+          {json.dumps(drift, indent=2)}
+
+          Respond with ONLY a JSON object, no markdown fences, no commentary, one entry per
+          method name given above:
+          {{"<method name>": {{"functional": <true|false>, "change_type": "<see list above>",
+                                "note": "<one-line explanation>"}}}}
+          """
+              last_err = None
+              for attempt in range(2):
+                  raw = call_gemini(prompt if attempt == 0 else
+                                     prompt + f"\n\nYour previous response was not valid JSON ({last_err}). Try again, JSON only.")
+                  try:
+                      parsed = json.loads(raw)
+                      if not isinstance(parsed, dict):
+                          raise ValueError("expected a JSON object keyed by method name")
+                      return parsed
+                  except (json.JSONDecodeError, ValueError) as e:
+                      last_err = str(e)
+                      continue
+              fail(f"Gemini did not return valid JSON for wrapper.py assessment after retry: {last_err}")
+
+          def call_gemini_synthesis(name, old_sig, new_sig, docstring, change_type, note):
+              """Escalation path for methods the cheap pass flagged as functional. Spends
+              extra tokens (full docstring + context) only on the subset that needs it, to
+              produce a specific, reviewer-facing summary of the behavioral impact. No doc
+              pages are rewritten here -- wrapper.py has no doc_mapping.yml entries yet, so
+              this only produces richer note text for the CHANGELOG/PR."""
+              prompt = f"""wrapper.py is stable infrastructure for py-cascade-cms. This method's
+          signature changed and was classified as a FUNCTIONAL change (change_type: {change_type}).
+          Write a specific, one-to-two sentence summary of the behavioral impact for readers
+          relying on the old behavior -- what callers need to change, and why.
+
+          Method: {name}
+          Docstring: {docstring or "(none)"}
+          Old signature: {json.dumps(old_sig)}
+          New signature: {json.dumps(new_sig)}
+          Initial classification note: {note}
+
+          Respond with ONLY a JSON object, no markdown fences, no commentary:
+          {{"note": "<specific one-to-two sentence explanation>"}}
+          """
+              last_err = None
+              for attempt in range(2):
+                  raw = call_gemini(prompt if attempt == 0 else
+                                     prompt + f"\n\nYour previous response was not valid JSON ({last_err}). Try again, JSON only.")
+                  try:
+                      parsed = json.loads(raw)
+                      if "note" not in parsed:
+                          raise ValueError("missing required key 'note'")
+                      return parsed["note"]
+                  except (json.JSONDecodeError, ValueError) as e:
+                      last_err = str(e)
+                      continue
+              fail(f"Gemini did not return valid JSON for wrapper.py synthesis on '{name}' after retry: {last_err}")
+
           # ---- apply updates ----
           changelog_lines = []
           for item in drifted:
@@ -231,8 +335,35 @@ jobs:
               doc_text = doc_text[:start] + result["updated_section"].rstrip() + "\n" + doc_text[end:]
               changelog_lines.append(result["changelog_entry"])
 
-          with open(doc_path, "w") as f:
-              f.write(doc_text)
+          if drifted:
+              with open(doc_path, "w") as f:
+                  f.write(doc_text)
+
+          # wrapper.py drift is always reported (even "no action needed"), never
+          # gated on doc_mapping.yml, since it has no fixed heading to rewrite. Hybrid
+          # routing: the cheap classification pass runs for every method; only methods
+          # it flags functional get escalated to the pricier synthesis prompt.
+          wrapper_summary_lines = []
+          if wrapper_drift:
+              assessment = assess_wrapper_drift(wrapper_drift)
+              for name, drift_info in wrapper_drift.items():
+                  info = assessment.get(name, {})
+                  change_type = info.get("change_type", "unknown")
+                  if info.get("functional"):
+                      note = call_gemini_synthesis(
+                          name, drift_info["old"], drift_info["new"],
+                          wrapper_docstrings.get(name), change_type,
+                          info.get("note", ""),
+                      )
+                      wrapper_summary_lines.append(
+                          f"- `wrapper.py:{name}` ({change_type}): {note} -> Gemini synthesized update"
+                      )
+                  else:
+                      wrapper_summary_lines.append(
+                          f"- `wrapper.py:{name}` ({change_type}): No action needed "
+                          "(signature change detected but functionality unchanged)"
+                      )
+              changelog_lines.extend(wrapper_summary_lines)
 
           with open(changelog_path) as f:
               existing_changelog = f.read()
@@ -241,9 +372,13 @@ jobs:
           with open(changelog_path, "w") as f:
               f.write(entry_block + existing_changelog)
 
+          summary_items = [d["method"] for d in drifted] + [f"wrapper:{n}" for n in wrapper_drift]
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write("has_changes=true\n")
-              f.write("summary=" + ", ".join(d["method"] for d in drifted) + "\n")
+              f.write("summary=" + ", ".join(summary_items) + "\n")
+              f.write("wrapper_summary<<WRAPPEREOF\n")
+              f.write("\n".join(wrapper_summary_lines) + "\n")
+              f.write("WRAPPEREOF\n")
 
           print("Docs updated locally, handing off to create-pull-request step.")
           PYEOF
@@ -263,4 +398,7 @@ jobs:
 
             Drafted with Gemini (gemini-3.5-flash-lite) from a signature-only diff — please review
             for accuracy before merging, especially any callouts about behavior changes.
+
+            **wrapper.py changes (functional vs. cosmetic):**
+            ${{ steps.run.outputs.wrapper_summary || '_No wrapper.py signature drift detected._' }}
           labels: docs-drift, automated

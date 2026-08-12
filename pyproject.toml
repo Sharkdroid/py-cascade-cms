@@ -8,7 +8,7 @@ version = "2.0.3"
 description = "A typed, async REST client for Hannon Hill Cascade CMS"
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.11"          # uses `Self`, `TypeAlias`, PEP 604 unions
+requires-python = ">=3.12"          # uses `Self`, `TypeAlias`, PEP 604 unions
 authors = [{ name = "Keith Shark" }]
 dependencies = [
     "aiohttp-client-cache[sqlite]",
