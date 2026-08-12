@@ -1,11 +1,11 @@
+import asyncio
+from collections.abc import Callable
+from concurrent.futures import Executor
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from functools import partial
-from typing import Callable, Any, Self
-import asyncio
-from contextlib import nullcontext
-from concurrent.futures import Executor
-from .driver import CascadeCMSRestDriver, RequestExecutor
-from .operation_logger import OperationLogger
+from typing import Any, Self
+
 from .cmstypes import (
     Asset,
     CascadeSuccess,
@@ -25,22 +25,24 @@ from .cmstypes import (
     deleteParameters,
     moveParameters,
     parse_access_rights,
+    parse_assets,
     parse_checked_out_asset,
     parse_create_asset,
+    parse_list_elements,
+    parse_payloads,
+    parse_success,
     parse_workflow_information,
     parse_workflow_settings,
     preference,
     publishInformation,
     resolve_identifier,
+    set_checkedout,
     workflowInformation,
     workflowSettingsPayload,
     workflowTransitionInformation,
-    parse_payloads,
-    parse_success,
-    set_checkedout,
-    parse_assets,
-    parse_list_elements,
 )
+from .driver import CascadeCMSRestDriver, RequestExecutor
+from .operation_logger import OperationLogger
 
 
 @dataclass
@@ -122,7 +124,7 @@ class Operations:
                         # ThreadPoolExecutor: I/O-bound work (default, lightweight)
                         loop = asyncio.get_event_loop()
                         await loop.run_in_executor(executor, callback, result)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - isolate one callback's failure from the rest
                 # Log and continue to next callback
                 if self._logger:
                     self._logger.log_python_error(e)
@@ -405,7 +407,6 @@ class Operations:
                 self._logger.log_operation(
                     "LISTSUBSCRIBERS", url, None, parser, identifier
                 )
-        return
 
     def siteCopy(
         self,

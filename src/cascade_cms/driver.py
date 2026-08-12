@@ -1,25 +1,26 @@
+from collections.abc import Callable
 from types import CoroutineType
-from typing import Any, Dict, Callable, Generic, Tuple, TypeVar
+from typing import Any, Generic, Literal, TypeVar
 
 T = TypeVar("T")
 
 # from aiohttp_client_cache.session import CachedSession
-from aiohttp import ClientSession, ClientResponse
-from aiohttp_client_cache.response import CachedResponse
-from aiohttp_client_cache import SQLiteBackend
 import asyncio
+from dataclasses import dataclass, field
+
+from aiohttp import ClientResponse, ClientSession
+from aiohttp_client_cache import SQLiteBackend
+from aiohttp_client_cache.response import CachedResponse
+
 from .cmstypes import (
-    Literal,
-    ResponseParser,
     BaseModel,
     CascadeError,
     CascadeObjects,
-    serialize_payload,
     Payloads,
-    ListElements,
+    ResponseParser,
+    serialize_payload,
 )
 from .operation_logger import OperationLogger
-from dataclasses import dataclass, field
 
 
 @dataclass
@@ -135,7 +136,7 @@ class RequestExecutor(Generic[T]):
 
 # Default cache: SQLite-backed, GET-only, only caches 200 responses.
 DEFAULT_CACHECONFIG: SQLiteBackend = SQLiteBackend(
-    cache_name=f"./cache/cache.sqlite",
+    cache_name="./cache/cache.sqlite",
     allowed_codes=(200,),
     allowed_methods=("GET",),
 )
@@ -153,7 +154,7 @@ class CascadeCMSRestDriver:
         self,
         apiKey: str,
         cascade_url: str,
-        backendConfig: Dict[str, Any] | None,
+        backendConfig: dict[str, Any] | None,
         logger: OperationLogger | None = None,
     ):
         """Set up the aiohttp session, event loop, and cache for this driver.
@@ -227,7 +228,7 @@ class CascadeCMSRestDriver:
                 result = await executor.fetch(
                     self.session, sem, self.cache, self._logger
                 )
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - isolate one request's failure from the batch
                 if self._logger:
                     self._logger.log_python_error(exc)
                     self._logger.log_progress(failed=True)

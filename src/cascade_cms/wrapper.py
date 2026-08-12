@@ -1,14 +1,12 @@
 import asyncio
 import os
 import sys
-from types import UnionType
 from concurrent.futures import Executor
+from typing import Any, TypeVar, overload
 
-from pydantic import BaseModel
-from .operations import Operations
 from .driver import CascadeCMSRestDriver, CascadeObjects
 from .operation_logger import OperationLogger
-from typing import Dict, Any, List, Optional, Type, TypeVar, overload
+from .operations import Operations
 
 T = TypeVar("T")
 
@@ -27,9 +25,9 @@ class CascadeWrapperBase:
 
     def __init__(
         self,
-        environmentVariables: Dict[str, str],
-        configurationVariables: Dict[str, Any],
-        debug: Dict[str, Any] | None = None,
+        environmentVariables: dict[str, str],
+        configurationVariables: dict[str, Any],
+        debug: dict[str, Any] | None = None,
     ):
         """Initialize the logger, driver, and operations builder.
 
@@ -68,18 +66,18 @@ class CascadeWrapperBase:
         try:
             self._logger.log_exit()
             return self._driver.close()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - log cleanup failure without masking the original exception
             self._logger.log_python_error(e)
 
         if exc_type is not None and not isinstance(exc_type, RuntimeWarning):
             return False  # Propagate the exception
 
     @overload
-    def submit_requests(self, result_type: Type[T], executor: Executor | None = None) -> List[T]: ...
+    def submit_requests(self, result_type: type[T], executor: Executor | None = None) -> list[T]: ...
     @overload
-    def submit_requests(self, executor: Executor | None = None) -> List[CascadeObjects]: ...
+    def submit_requests(self, executor: Executor | None = None) -> list[CascadeObjects]: ...
     
-    def submit_requests(self, _result_type: Type[T] | None = None, executor: Executor | None = None) -> List[CascadeObjects] | List[T]:
+    def submit_requests(self, _result_type: type[T] | None = None, executor: Executor | None = None) -> list[CascadeObjects] | list[T]:
         """
         Submit all pending requests and execute registered callbacks on results.
         
@@ -119,11 +117,11 @@ class CascadeWrapperBase:
                 )
 
             return results
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - top-level entry point must not raise; log and return empty
             self._logger.log_python_error(e)
             return []
 
-    async def _execute_all_callbacks(self, results: List[CascadeObjects], executor: Executor | None = None) -> None:
+    async def _execute_all_callbacks(self, results: list[CascadeObjects], executor: Executor | None = None) -> None:
         """
         Execute registered callbacks on all results sequentially per result.
         

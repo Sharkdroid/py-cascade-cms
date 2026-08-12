@@ -1,9 +1,9 @@
 # operation_logger.py
-import sys
 import logging
+import sys
 import traceback
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -45,7 +45,7 @@ class OperationLogger:
             if self._is_debug else Path("./logs")
         log_dir.mkdir(parents=True, exist_ok=True)
 
-        timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+        timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H-%M-%S")
         suffix = "debug" if self._is_debug else None
         parts = [self._server, suffix, timestamp] if suffix else [self._server, timestamp]
         filename = "_".join(parts) + ".log"
@@ -126,7 +126,7 @@ class OperationLogger:
 
     def log_init(self, cascade_url: str, script_name: str):
         self._script_name = script_name
-        self._start_time = datetime.now(timezone.utc)
+        self._start_time = datetime.now(UTC)
         self._console("[INIT]: Connecting to " + self._server)
         if self._is_debug:
             self._console("[DEBUG]: running in debug mode")
@@ -140,7 +140,7 @@ class OperationLogger:
 
     def log_exit(self):
         elapsed = (
-            datetime.now(timezone.utc) - self._start_time
+            datetime.now(UTC) - self._start_time
         ).total_seconds() if self._start_time else 0
         self._console(
             f"[DONE]: {self._processed_count} assets processed "
@@ -267,17 +267,17 @@ class OperationLogger:
         Logfile: [ERROR]: path + structured block
         """
         display = self._format_identifier(identifier)
-        self._console(f"[ERROR]: CascadeError — check log")
+        self._console("[ERROR]: CascadeError — check log")
 
         if self._is_debug:
             pad = self._indent()
             self._write(f"{pad}")
             self._write(f"*!! CascadeError: {message}")
             self._write(f"  asset: {display}")
-            self._write(f"!!")
+            self._write("!!")
         else:
             self._write(f"[ERROR]: {display}")
-            self._write(f"  Error Type: CascadeError")
+            self._write("  Error Type: CascadeError")
             self._write(f"  Error Message: {message}")
 
     def log_python_error(self, exc: Exception):
@@ -310,14 +310,14 @@ class OperationLogger:
                 self._write(f"  function: {frame_info.name}")
                 self._write(f"  line {frame_info.lineno}: {frame_info.line}")
             if self._config.get("show_error_variables", True) and frame_locals:
-                self._write(f"  variables:")
+                self._write("  variables:")
                 for k, v in frame_locals.items():
                     self._write(
-                        f"    {k:<10} = {repr(v)}  ({type(v).__name__})"
+                        f"    {k:<10} = {v!r}  ({type(v).__name__})"
                     )
-            self._write(f"!!")
+            self._write("!!")
         else:
-            self._write(f"[ERROR]:")
+            self._write("[ERROR]:")
             self._write(f"  Error Type: {exc_type}")
             self._write(f"  Error Message: {exc_msg}")
 

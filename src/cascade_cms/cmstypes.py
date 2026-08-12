@@ -1,56 +1,34 @@
-import logging
-from pprint import pprint
-
-from typing_extensions import TypedDict
-from pydantic import (
-    AfterValidator,
-    AliasChoices,
-    AliasGenerator,
-    BaseModel,
-    TypeAdapter,
-    ConfigDict,
-    Field,
-    FieldSerializationInfo,
-    ModelWrapValidatorHandler,
-    PrivateAttr,
-    RootModel,
-    PlainSerializer,
-    SerializerFunctionWrapHandler,
-    StringConstraints,
-    DirectoryPath,
-    TypeAdapter,
-    AliasPath,
-    field_serializer,
-    model_serializer,
-    ValidationError,
-    create_model,
-    field_validator,
-    model_validator,
-)
 
 import uuid
 from typing import (
     Annotated,
-    Callable,
-    Generic,
-    List,
-    Literal,
-    Optional,
-    Dict,
     Any,
+    Generic,
+    Literal,
     Self,
-    Tuple,
-    Type,
     TypeAlias,
-    TypeVar,
     TypedDict,
-    Union,
-    ClassVar,
+    TypeVar,
+)
+
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    SerializerFunctionWrapHandler,
+    TypeAdapter,
+    ValidationError,
+    field_serializer,
+    field_validator,
+    model_serializer,
+    model_validator,
 )
 
 T = TypeVar("T")
-from datetime import datetime
 import json
+from datetime import datetime
 
 # ----- TYPE ALIASES & HELPERS -----
 
@@ -229,7 +207,7 @@ class PathBase(TypedDict):
 
     path: str
     siteId: uuid.UUID
-    siteName: Annotated[Optional[str], Field(default=None)]
+    siteName: Annotated[str | None, Field(default=None)]
 
 
 class Path(PathBase):
@@ -312,13 +290,13 @@ class NewAsset(SimplePayload):
 
     name: str
     asset_type: AssetTypes
-    site_name: Optional[str] = Field(default=None, alias="siteName")
-    site_id: Optional[uuid.UUID] = Field(default=None, alias="siteId")
-    parent_folder_path: Optional[str] = Field(default=None, alias="parentFolderPath")
-    parent_folder_id: Optional[uuid.UUID] = Field(default=None, alias="parentFolderId")
+    site_name: str | None = Field(default=None, alias="siteName")
+    site_id: uuid.UUID | None = Field(default=None, alias="siteId")
+    parent_folder_path: str | None = Field(default=None, alias="parentFolderPath")
+    parent_folder_id: uuid.UUID | None = Field(default=None, alias="parentFolderId")
 
     @field_serializer("site_id", "parent_folder_id")
-    def serialize_uuid_as_hex(self, value: Optional[uuid.UUID]) -> Optional[str]:
+    def serialize_uuid_as_hex(self, value: uuid.UUID | None) -> str | None:
         return value.hex if value is not None else None
 
     @model_validator(mode="after")
@@ -363,8 +341,8 @@ class IdentifierType(BaseModel):
 
     identifier: Annotated[uuid.UUID, Field(alias='id')]
     asset_type: Annotated[AssetTypes, Field(default=..., alias="type")]
-    recycled: Annotated[Optional[bool], Field(default=None)] = None
-    path: Annotated[Optional[PathBase], Field(default=None)] = None
+    recycled: Annotated[bool | None, Field(default=None)] = None
+    path: Annotated[PathBase | None, Field(default=None)] = None
 
     # Cascade rejects dashed UUIDs for identifiers - serialize as bare hex.
     @field_serializer("identifier")
@@ -442,7 +420,7 @@ class PageRegion(BaseModel):
     )
 
     name: str
-    content: Optional[str] = None
+    content: str | None = None
 
 
 class PageConfiguration(BaseModel):
@@ -462,8 +440,8 @@ Used to retrieve the workflow deinitions on assets
 
 class WorkflowSettingsModel(TypedDict):
     identifier: IdentifierType
-    workflowDefinitions: List[IdentifierType]
-    inheritedWorkflowDefinitions: List[IdentifierType]
+    workflowDefinitions: list[IdentifierType]
+    inheritedWorkflowDefinitions: list[IdentifierType]
     inheritWorkflows: bool
     requireWorkflow: bool
 
@@ -471,8 +449,8 @@ class WorkflowSettingsModel(TypedDict):
 class workflowSettingsPayload(SimplePayload):
 
     body: WorkflowSettingsModel = Field(..., alias="workflowSettings")
-    applyInheritWorkflowsToChildren: Optional[bool] = False
-    applyRequireWorkflowToChildren: Optional[bool] = False
+    applyInheritWorkflowsToChildren: bool | None = False
+    applyRequireWorkflowToChildren: bool | None = False
     # __model__ = WorkflowSettingsModel
 
 
@@ -484,13 +462,13 @@ class Entries(TypedDict):
 
 class AccessRightsModel(TypedDict):
     user_id: Annotated[IdentifierType, Field(alias="identifier")]
-    acl_entries: Annotated[List[Entries], Field(alias="aclEntries")]
+    acl_entries: Annotated[list[Entries], Field(alias="aclEntries")]
     allLevel: Literal["none", "read", "write"]
 
 
 class accessRightsInformationPayload(SimplePayload):
     body: AccessRightsModel = Field(default=..., alias="accessRightsInformation")
-    apply_to_children: Optional[bool] = Field(default=False, alias="applyToChildren")
+    apply_to_children: bool | None = Field(default=False, alias="applyToChildren")
 
 
 class WorkflowAction(TypedDict):
@@ -505,7 +483,7 @@ class WorkflowSteps(TypedDict):
     label: str
     step_type: Annotated[str, Field(alias="stepType")]
     actions: list[WorkflowAction]
-    owner: Optional[str]
+    owner: str | None
 
 
 class workflowInformation(BaseModel):
@@ -548,12 +526,12 @@ class Asset:
     """
 
     _asset_type: str
-    _data: Dict[str, Any]
+    _data: dict[str, Any]
     _page_configs: list[PageConfiguration]
 
     def __init__(self, data: dict):
         object.__setattr__(self, "_asset_type", next(iter(data["asset"].keys())))
-        inner: Dict[str, Any] = data["asset"][self._asset_type]
+        inner: dict[str, Any] = data["asset"][self._asset_type]
         object.__setattr__(self, "_data", inner)
 
         # Parse pageConfigurations into Pydantic models
@@ -591,7 +569,7 @@ class Asset:
         """Access _data fields conveniently."""
         return self._data.get(key, default)
 
-    def get_data_structure(self: 'Asset', group: str, identifier: str) -> list[Dict[str, Any]] | None:
+    def get_data_structure(self: 'Asset', group: str, identifier: str) -> list[dict[str, Any]] | None:
         """
         Find nodes matching identifier within all instances of a group.
         Returns first match per group instance as a list of node objects by reference.
@@ -630,8 +608,8 @@ class Asset:
         return matches if matches else None
 
     def get_page_configuration(
-        self, configuration_name: str, page_region: Optional[str] = None
-    ) -> Optional[PageConfiguration | PageRegion]:
+        self, configuration_name: str, page_region: str | None = None
+    ) -> PageConfiguration | PageRegion | None:
         """
         Find a page configuration and optionally a specific region within it.
         Returns Pydantic model objects by reference.
@@ -732,10 +710,10 @@ class SearchInformation(SimplePayload):
 
     siteName: str
     searchTerms: str
-    searchFields: List[FieldsSearchTypes] | List[Literal[""]] = Field(
+    searchFields: list[FieldsSearchTypes] | list[Literal[""]] = Field(
         default_factory=lambda: [""]
     )
-    searchTypes: List[AssetTypes] | List[Literal[""]] = Field(
+    searchTypes: list[AssetTypes] | list[Literal[""]] = Field(
         default_factory=lambda: [""]
     )
 
@@ -744,7 +722,7 @@ class preference(SimplePayload):
     """Payload for the `editPreference` operation (a single user preference name/value)."""
 
     name: str
-    value: Optional[str]
+    value: str | None
 
 
 class deleteParameters(SimplePayload):
@@ -801,7 +779,7 @@ class workflowTransitionInformation(SimplePayload):
 
     workflow_identifier: Annotated[uuid.UUID, Field(alias="workflowId")]
     action_identifier: Annotated[str, Field(alias="actionIdentifier")]
-    transition_comment: Optional[str] = Field(alias="transitionComment")
+    transition_comment: str | None = Field(alias="transitionComment")
 
     # TODO LATER: could add a model_validator after to make sure the uuid is coming from a Action
 
@@ -811,18 +789,18 @@ class auditParameters(SimplePayload):
 
     auditType: AuditTypes
     by_identifier: IdentifierType = Field(alias="identifier")
-    by_username: Optional[str] = Field(default=None, alias="username")
-    by_group: Optional[str] = Field(default=None, alias="groupname")
-    by_role: Optional[str] = Field(default=None, alias="rolename")
-    startDate: Optional[datetime] = Field(default=None)
-    endDate: Optional[datetime] = Field(default=None)
+    by_username: str | None = Field(default=None, alias="username")
+    by_group: str | None = Field(default=None, alias="groupname")
+    by_role: str | None = Field(default=None, alias="rolename")
+    startDate: datetime | None = Field(default=None)
+    endDate: datetime | None = Field(default=None)
 
     # make sure its only user, group, role
     @field_validator("by_identifier", mode="after")
     @classmethod
     def is_admin_entity(cls, identifier: IdentifierType) -> IdentifierType:
         if identifier.get_type not in {"user", "role", "group"}:
-            raise ValueError(f"Identifier needs to be either user, role, or group.")
+            raise ValueError("Identifier needs to be either user, role, or group.")
         return identifier
 
     """
@@ -935,14 +913,14 @@ class ResponseParser(BaseModel, Generic[T]):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    serializer: Optional[TypeAdapter[Any] | AssetAdapter] = None
+    serializer: TypeAdapter[Any] | AssetAdapter | None = None
     _content: T | CascadeError | None = PrivateAttr(default=None)
     _cacheable: bool = PrivateAttr(default=False)
 
     def __init__(
         self,
         raw: bytes,
-        serializer: Optional[TypeAdapter[Any] | AssetAdapter] = None,
+        serializer: TypeAdapter[Any] | AssetAdapter | None = None,
         **kwargs,
     ):
         super().__init__(serializer=serializer, **kwargs)
@@ -950,7 +928,7 @@ class ResponseParser(BaseModel, Generic[T]):
             self._content = CascadeError.model_validate_json(raw)
         except ValidationError:
             if self.serializer is None:
-                RuntimeWarning("No serializer included...")
+                raise RuntimeWarning("No serializer included...")
             self._content = self.serializer.validate_json(raw)  # type: ignore[assignment]
             self._cacheable = True
 
