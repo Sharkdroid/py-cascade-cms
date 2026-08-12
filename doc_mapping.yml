@@ -1,0 +1,90 @@
+# doc_mapping.yml
+#
+# Lives in py-cascade-cms (repo root). Consumed by
+# .github/workflows/docs-drift.yml to know, for each Operations method:
+#   - which heading in all-operations.md documents it
+#   - which cmstypes.py payload model (if any) it consumes, so a field
+#     change on the model also counts as drift for that method
+#
+# Hand-maintained by design: keeps the mapping predictable and cheap to
+# check, instead of asking Gemini to search the wiki and guess.
+
+operations_doc: wiki/cascade-cms-wiki/docs/operations/all-operations.md
+changelog: CHANGELOG.md
+
+methods:
+  read:
+    heading: "read(identifiers, parser=parse_assets)"
+    payload_model: null
+  create:
+    heading: "create(payload)"
+    payload_model: NewAsset
+  edit:
+    heading: "edit(payload)"
+    payload_model: null
+  delete:
+    heading: "delete(identifier, payload=None)"
+    payload_model: deleteParameters
+  copy:
+    heading: "copy(identifier, payload)"
+    payload_model: copyParameters
+  move:
+    heading: "move(identifier, payload)"
+    payload_model: moveParameters
+  search:
+    heading: "search(payload)"
+    payload_model: SearchInformation
+  listSites:
+    heading: "listSites()"
+    payload_model: null
+  listSubscribers:
+    heading: "listSubscribers(identifier)"
+    payload_model: null
+  publish:
+    heading: "publish(identifier, payload=None)"
+    payload_model: publishInformation
+  checkOut:
+    heading: "checkOut(identifier)"
+    payload_model: null
+  checkIn:
+    heading: "checkIn(identifier, payload)"
+    payload_model: Comment
+  readWorkflowInformation:
+    heading: "readWorkflowInformation(identifier)"
+    payload_model: null
+  performWorkflowTransition:
+    heading: "performWorkflowTransition(identifier, payload)"
+    payload_model: workflowTransitionInformation
+  readWorkflowSettings:
+    heading: "readWorkflowSettings(identifier)"
+    payload_model: null
+  editWorkflowSettings:
+    heading: "editWorkflowSettings(payload)"
+    payload_model: workflowSettingsPayload
+  readAccessRights:
+    heading: "readAccessRights(identifier)"
+    payload_model: null
+  editAccessRights:
+    heading: "editAccessRights(payload)"
+    payload_model: accessRightsInformationPayload
+  readAudits:
+    heading: "readAudits(payload)"
+    payload_model: auditParameters
+  siteCopy:
+    heading: "siteCopy(payload)"
+    payload_model: SiteCopyParameter
+  readPreferences:
+    heading: "readPreferences()"
+    payload_model: null
+  editPreference:
+    heading: "editPreference(payload)"
+    payload_model: preference
+  listMessages:
+    heading: "listMessages()"
+    payload_model: null
+  markMessage:
+    heading: "markMessage(message)"
+    payload_model: Message
+  deleteMessage:
+    heading: "deleteMessage(message)"
+    payload_model: Message
