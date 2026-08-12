@@ -23,7 +23,7 @@ class OperationLogger:
 
     def __init__(self, server: str, debug_config: dict | None = None):
         self._server = server
-        self._config = debug_config          # None = normal mode
+        self._config: dict[str, Any] = debug_config if debug_config is not None else {}
         self._is_debug = debug_config is not None
         self._stack: list[str] = []          # active operation scope stack
         self._active_callback: str | None = None  # currently executing callback name

@@ -116,7 +116,7 @@ class RequestExecutor(Generic[T]):
                 data=payload_bytes,
             ) as response:
                 response.raise_for_status()
-                raw_data: bytes = await response.read()
+                raw_data = await response.read()
                 if logger:
                     logger.log_response(raw_data)
                     logger.log_network_headers(
@@ -193,10 +193,11 @@ class CascadeCMSRestDriver:
             "Content-Type": "application/json;charset=UTF-8",
         }
 
+        self.cache: CacheHandler
         if backendConfig is None:
-            self.cache: CacheHandler = CacheHandler(DEFAULT_CACHECONFIG)
+            self.cache = CacheHandler(DEFAULT_CACHECONFIG)
         else:
-            self.cache: CacheHandler = CacheHandler(SQLiteBackend(**backendConfig))
+            self.cache = CacheHandler(SQLiteBackend(**backendConfig))
 
         async def _create_session():
             return ClientSession(headers=headers)

@@ -73,11 +73,11 @@ class CascadeWrapperBase:
             return False  # Propagate the exception
 
     @overload
-    def submit_requests(self, result_type: type[T], executor: Executor | None = None) -> list[T]: ...
+    def submit_requests(self, result_type: type[T], *, executor: Executor | None = None) -> list[T]: ...
     @overload
-    def submit_requests(self, executor: Executor | None = None) -> list[CascadeObjects]: ...
-    
-    def submit_requests(self, _result_type: type[T] | None = None, executor: Executor | None = None) -> list[CascadeObjects] | list[T]:
+    def submit_requests(self, *, executor: Executor | None = None) -> list[CascadeObjects]: ...
+
+    def submit_requests(self, result_type: type[T] | None = None, *, executor: Executor | None = None) -> list[CascadeObjects] | list[T]:
         """
         Submit all pending requests and execute registered callbacks on results.
         

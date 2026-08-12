@@ -9,6 +9,7 @@ from typing import (
     TypeAlias,
     TypedDict,
     TypeVar,
+    cast,
 )
 
 from pydantic import (
@@ -401,10 +402,10 @@ def resolve_identifier(identifier: "IdentifierType | Path") -> tuple[str, ...]:
     `.../{operation_name}/{asset_type}/{siteName}/{path}`.
     """
     if isinstance(identifier, IdentifierType):
-        return (identifier.get_type, identifier.get_id)
+        return (str(identifier.get_type), str(identifier.get_id))
     if identifier.get("siteName") is None:
         raise ValueError("Path identifiers require siteName to build the request URL")
-    return (identifier["asset_type"], identifier["siteName"], identifier["path"])
+    return (str(identifier["asset_type"]), str(identifier["siteName"]), str(identifier["path"]))
 
 
 # ----- Helper Models (support response parsing) -----
@@ -711,10 +712,10 @@ class SearchInformation(SimplePayload):
     siteName: str
     searchTerms: str
     searchFields: list[FieldsSearchTypes] | list[Literal[""]] = Field(
-        default_factory=lambda: [""]
+        default_factory=lambda: [cast(Literal[""], "")]
     )
     searchTypes: list[AssetTypes] | list[Literal[""]] = Field(
-        default_factory=lambda: [""]
+        default_factory=lambda: [cast(Literal[""], "")]
     )
 
 
@@ -938,13 +939,13 @@ class ResponseParser(BaseModel, Generic[T]):
 
 def parse_assets(raw: bytes) -> ResponseParser[Asset]:
     """Parse a `read` response body into an `Asset`."""
-    a = ResponseParser(raw=raw, serializer=asset_adapter)
+    a: ResponseParser[Asset] = ResponseParser(raw=raw, serializer=asset_adapter)
     return a
 
 
 def parse_list_elements(raw: bytes) -> ResponseParser[ListElements]:
     """Parse a list-shaped response body (search, listSites, etc.) into `ListElements`."""
-    a = ResponseParser(raw, serializer=list_element_adapter)
+    a: ResponseParser[ListElements] = ResponseParser(raw, serializer=list_element_adapter)
     return a
 
 
