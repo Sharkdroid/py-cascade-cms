@@ -29,4 +29,10 @@ packages = ["src/cascade_cms"]
 # Verbatim snapshot of src/cascade_cms/, synced by skill/build_skill.py — it is
 # linted at its source, and diverging the copy to satisfy ruff would break the
 # byte-for-byte parity the bundle manifest checks.
-exclude = ["skill/cascade-script-writer/cascade_cms"]
+# Skill bundle contents are not library code: cascade_cms/ is a vendored
+# snapshot, and templates/ and scripts/ are standalone files that ship to end
+# users. Only the builders at skill/*.py are linted.
+exclude = [
+    "skill/cascade-script-writer",
+    "skill/cascade-script-writer-lite",
+]

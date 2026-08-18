@@ -5,7 +5,10 @@ CMS 8. Library source: `src/cascade_cms/`.
 
 ## Writing a script that uses the library
 
-Follow `skill/cascade-script-writer/SKILL.md`. In short:
+For a single-operation script, follow
+`skill/cascade-script-writer-lite/SKILL.md` — 6 templates, one reference file,
+and no reason to open the library source. For multi-operation pipelines or
+callback patterns, follow `skill/cascade-script-writer/SKILL.md`:
 
 1. Pick a starting template from `skill/cascade-script-writer/templates/INDEX.md`.
 2. Look up exact field names and aliases in
@@ -26,4 +29,4 @@ attribute assignment, never subscript.
 ## Working on the library itself
 
 `ruff check .`, `mypy src/`, and `pytest` must all pass. After changing
-`src/cascade_cms/`, rebuild the skill bundle with `python skill/build_skill.py`.
+`src/cascade_cms/`, rebuild both skill bundles with `python skill/build_skill.py`.
