@@ -89,7 +89,10 @@ class CascadeWrapperBase:
         Results line up with the chains **in the order they were created**,
         so `results[0]` belongs to the first chain built. Failures appear in
         that list rather than being dropped: a `CascadeError` for an API
-        failure, or the exception object a callback raised.
+        failure, or the exception object a callback raised. They are
+        returned as values, not raised — a missed `isinstance(result,
+        CascadeError | Exception)` check lets a failure flow downstream as
+        if it were a normal result.
 
         The chain list is cleared afterwards, so callbacks registered for one
         batch never run again in the next.

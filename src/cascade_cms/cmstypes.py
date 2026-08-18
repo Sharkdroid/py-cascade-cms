@@ -6,6 +6,7 @@ from typing import (
     Annotated,
     Any,
     Literal,
+    NotRequired,
     Self,
     TypedDict,
     TypeVar,
@@ -207,7 +208,7 @@ class PathBase(TypedDict):
     """
 
     path: str
-    siteId: uuid.UUID
+    siteId: NotRequired[uuid.UUID]
     siteName: Annotated[str | None, Field(default=None)]
 
 
@@ -266,8 +267,18 @@ class SimplePayload(BaseModel):
         except AttributeError:
             fields_info = self.model_fields  # Pydantic V2
 
+        def dump(value: Any) -> Any:
+            # This dict comprehension only aliases top-level keys; a nested
+            # BaseModel passed through as-is would serialize under its
+            # Python field names instead of its aliases, so recurse.
+            if isinstance(value, BaseModel):
+                return value.model_dump(by_alias=True)
+            if isinstance(value, list):
+                return [dump(item) for item in value]
+            return value
+
         aliased = {
-            (fields_info[name].alias or name): value
+            (fields_info[name].alias or name): dump(value)
             for name, value in self.__dict__.items()
             if name in fields_info
         }
@@ -562,9 +573,20 @@ class Asset:
                 )
         self._data[key] = value
 
+    # Cascade wraps a response under a key that's usually the requested
+    # asset_type re-cased (e.g. "dataDefinition" for a "datadefinition"
+    # request), but not always: this handles the exceptions where the
+    # wrapper key isn't a mechanical re-casing of the request-side type.
+    _ASSET_TYPE_KEY_ALIASES: "dict[str, str]" = {
+        "scriptformat": "format",
+    }
+
     @property
     def asset_type(self) -> str:
-        return self._asset_type
+        """The request-side asset type (matching `AssetTypes`/`Path.asset_type`),
+        normalized from the raw response wrapper key in `_asset_type`."""
+        lowered = self._asset_type.lower()
+        return self._ASSET_TYPE_KEY_ALIASES.get(lowered, lowered)
 
     def get(self, key: str, default=None):
         """Access _data fields conveniently."""
@@ -638,6 +660,29 @@ class Asset:
 
         return region
 
+    # Field names Cascade exposes on a site asset for the root container of
+    # each asset type. Only asset types confirmed against a real site payload
+    # are listed here; unmapped types return None rather than guess.
+    _ROOT_CONTAINER_FIELDS: "dict[str, str]" = {
+        "datadefinition": "rootDataDefinitionContainerId",
+        "sharedfield": "rootSharedFieldContainerId",
+        "folder": "rootFolderId",
+    }
+
+    def root_container_id(self, asset_type: "AssetTypes") -> uuid.UUID | None:
+        """Return the root container id for `asset_type` on this site asset.
+
+        `self` must be a `site` asset. Returns None if there's no known root
+        field for `asset_type` (see `_ROOT_CONTAINER_FIELDS`).
+        """
+        field = self._ROOT_CONTAINER_FIELDS.get(asset_type)
+        if field is None:
+            return None
+        value = self._data.get(field)
+        if value is None:
+            return None
+        return uuid.UUID(value)
+
 
 class Message(SimplePayload):
     """A Cascade inbox message, also used as the payload for mark/delete-message operations."""
@@ -679,7 +724,8 @@ class ListElements(BaseModel):
             "preferences",
             "matches",
             "messages",
-            "relationships"
+            "relationships",
+            "sites",
         )
     )
 
@@ -870,18 +916,13 @@ class AssetAdapter:
         return Asset(json.loads(json_str))
 
     def dump_json(self, asset: Asset) -> bytes:
-        page_configs = [
-            {
-                "name": c.name,
-                "pageRegions": [
-                    {"name": r.name, "content": r.content} for r in c.pageRegions
-                ],
-            }
-            for c in asset._page_configs
-        ]
+        # `_page_configs` only models `name`/`pageRegions[].content` for
+        # convenient access via `get_page_configuration`; it is not
+        # authoritative on write. `_data["pageConfigurations"]` (copied
+        # below via `asset._data`) still holds the original raw dicts,
+        # including fields the model doesn't parse (templateId, blockId,
+        # formatId, ...), so round-tripping preserves them.
         data = {**asset._data}
-        if page_configs:
-            data["pageConfigurations"] = page_configs
         reconstructed = {"asset": {asset._asset_type: data}}
         return json.dumps(reconstructed).encode()
 

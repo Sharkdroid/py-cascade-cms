@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.0.1]
+
+### Fixed
+- `SimplePayload.format_builder()` now recurses into nested `BaseModel`/`list[BaseModel]` field values (e.g. an `IdentifierType` nested inside `moveParameters`, `deleteParameters`, `copyParameters`, `SiteCopyParameter`, `auditParameters`), so they serialize under their aliases (`id`/`type`) instead of their Python field names (`identifier`/`asset_type`). Previously only top-level fields were aliased.
+- `AssetAdapter.dump_json()` no longer rebuilds `pageConfigurations` from the parsed `PageConfiguration` models (which only carry `name` and `pageRegions[].content`). It now serializes `asset._data` verbatim, so `templateId`/`blockId`/`formatId` and any other fields Cascade sends survive an `edit()` round-trip instead of being silently dropped.
+- `ListElements.elements`'s `AliasChoices` now includes `"sites"`, so `listSites()` responses parse instead of raising and being dropped by the driver.
+- `PathBase.siteId` is now `NotRequired` — `resolve_identifier()` never reads it, so a `Path` built without it no longer trips type checkers over an unused required field.
+
+### Added
+- `Asset.asset_type` now normalizes the raw response wrapper key (e.g. `"dataDefinition"`, `"scriptFormat"`) to the request-side type (`"datadefinition"`, `"format"`) instead of returning it verbatim.
+- `Asset.root_container_id(asset_type)` — looks up a site asset's root container id for a given asset type (currently covers `datadefinition`, `sharedfield`, `folder`; returns `None` for unmapped types), so callers no longer need to hand-carry the `root*ContainerId` field-name table themselves.
+
 ## [3.0.0]
 
 ### Changed

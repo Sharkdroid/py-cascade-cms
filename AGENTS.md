@@ -65,3 +65,15 @@ validates every template, and zips. The lite build also regenerates `OPS.md`,
 re-copies its templates and scripts from the full skill, and fails if
 `SKILL.md` or `OPS.md` outgrows its size budget. Never copy the snapshot by
 hand — a stale bundle makes the validator reject correct scripts.
+
+**This is not CI automation, and never will be.** `build_skill.py` only
+syncs, validates, and zips — it cannot write or repair a template. When a
+library change breaks a template's API usage (a renamed method, a changed
+signature, a different execution model — anything `validate_script.py`
+would reject), the fix is to rewrite the affected template by hand, which
+requires understanding the new API well enough to teach it correctly. That
+is agent/human judgment work, not something `release.yml` can do
+unattended. Treat skill rebuilding as a required manual step before tagging
+any release that touches the public API in `src/cascade_cms/` — run
+`build_skill.py`, fix whatever templates it flags, and only then commit and
+tag.
