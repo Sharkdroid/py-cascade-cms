@@ -6,7 +6,7 @@ from typing import Any, TypeVar, overload
 
 from .driver import CascadeCMSRestDriver, CascadeObjects
 from .operation_logger import OperationLogger
-from .operations import Operations
+from .operations import OperationChain, Operations
 
 T = TypeVar("T")
 
@@ -79,70 +79,76 @@ class CascadeWrapperBase:
 
     def submit_requests(self, result_type: type[T] | None = None, *, executor: Executor | None = None) -> list[CascadeObjects] | list[T]:
         """
-        Submit all pending requests and execute registered callbacks on results.
-        
-        Callbacks are invoked sequentially per result:
-            result1 → callback1 → callback2
-            result2 → callback1 → callback2
-            ...
-        
+        Run every registered operation chain and return one result per chain.
+
+        Chains run concurrently, but the nodes inside a chain run strictly in
+        order — each operation or callback receives the previous node's
+        result. A chain stops at its first failure without affecting any
+        other chain.
+
+        Results line up with the chains **in the order they were created**,
+        so `results[0]` belongs to the first chain built. Failures appear in
+        that list rather than being dropped: a `CascadeError` for an API
+        failure, or the exception object a callback raised.
+
+        The chain list is cleared afterwards, so callbacks registered for one
+        batch never run again in the next.
+
         Args:
-            _result_type: Type hint for Pylance/mypy (e.g., submit_requests(Asset))
+            result_type: Type hint for Pylance/mypy (e.g., submit_requests(Asset))
             executor: Optional Executor for sync callbacks.
                      Use ThreadPoolExecutor (default) for I/O-bound work.
                      Use ProcessPoolExecutor(max_workers=<cpu_count>) for CPU-bound work.
-                     
+
         Example (CPU-bound callbacks):
             from concurrent.futures import ProcessPoolExecutor
             from os import cpu_count
-            
+
             with ProcessPoolExecutor(max_workers=cpu_count()) as executor:
                 cascade.operations.read(id).then(optimize_image)
                 results = cascade.submit_requests(executor=executor)
-        
+
         Returns:
-            List of results from all requests. Callbacks execute during this call
-            but do not modify the returned results (unless they explicitly do).
+            One entry per chain: its final result, or the error that stopped it.
         """
         self._logger.log_running(os.path.basename(sys.argv[0]))
+        chains = list(self.operations._chains)
+        if not chains:
+            return []
+
+        self._logger.set_total(len(chains))
         try:
-            # Step 1: Execute all HTTP requests
-            results = self._driver._submitRequests()
-
-            # Step 2: If callbacks are registered, execute them on each result
-            if self.operations._callbacks:
-                # Use the driver's existing event loop to run callbacks
-                self._driver.eventLoop.run_until_complete(
-                    self._execute_all_callbacks(results, executor)
-                )
-
-            return results
+            return self._driver.eventLoop.run_until_complete(
+                self._execute_chains(chains, executor)
+            )
         except Exception as e:  # noqa: BLE001 - top-level entry point must not raise; log and return empty
             self._logger.log_python_error(e)
             return []
+        finally:
+            self.operations._reset_chains()
 
-    async def _execute_all_callbacks(self, results: list[CascadeObjects], executor: Executor | None = None) -> None:
+    async def _execute_chains(
+        self,
+        chains: list[OperationChain],
+        executor: Executor | None = None,
+    ) -> list[Any]:
         """
-        Execute registered callbacks on all results sequentially per result.
-        
-        Uses asyncio.gather to allow concurrent processing of different results
-        (if callbacks are async), while keeping sequential callback order per result.
-        
+        Run every chain concurrently and collect their results in chain order.
+
+        `return_exceptions=True` is a backstop only: a chain already reports
+        operation and callback failures as values, so an exception here means
+        the chain machinery itself broke, and one broken chain must not take
+        the rest of the batch down with it.
+
         Args:
-            results: List of result objects from API requests.
+            chains: The chains to run.
             executor: Optional Executor for sync callbacks.
-                     None (default) uses ThreadPoolExecutor.
-                     ProcessPoolExecutor for CPU-bound work.
+
+        Returns:
+            One entry per chain, in the order the chains were created.
         """
-        if not results:
-            return
-        
-        # Create a task for each result
-        tasks = [
-            self.operations._execute_callbacks_on_result(result, executor)
-            for result in results
-        ]
-        
-        # Run all tasks concurrently, capturing any exceptions
-        # return_exceptions=True prevents one failing callback from crashing the batch
-        await asyncio.gather(*tasks, return_exceptions=False)
+        results = await asyncio.gather(
+            *(chain.execute_async(executor) for chain in chains),
+            return_exceptions=True,
+        )
+        return list(results)

@@ -34,6 +34,42 @@ Operations that take an identifier (`read`, `delete`, `copy`, `move`, `publish`,
 
 See `examples/read_and_update_asset.py` for a fuller walkthrough.
 
+### Operation chains
+
+Every `cascade.operations.<op>()` call starts an **operation chain** and returns it. Chaining
+`.then(callback)` or another operation onto it adds a step to *that* chain; a fresh
+`cascade.operations.<op>()` call starts a separate one.
+
+Steps inside a chain run strictly in order, each receiving the previous step's result, so a
+read can be transformed and written back in one pass:
+
+```python
+def rewrite(asset):
+    asset.keywords = "updated"
+    return asset
+
+with CascadeWrapperBase(environment_variables, configuration_variables) as cascade:
+    cascade.operations.read(page_a).edit(page_a, rewrite).publish(page_a)
+    cascade.operations.read(page_b).then(report)
+    cascade.operations.delete(old_page)
+
+    results = cascade.submit_requests()
+```
+
+- **Chains run concurrently**, so a batch still costs one round of requests, not one per chain.
+  Only the steps *within* a chain are sequential.
+- **One result per chain, in the order the chains were built** — `results[0]` belongs to the
+  first chain. No more matching responses back to requests by hand.
+- **Failures are values, not gaps.** A chain stops at its first failure and that object lands in
+  the results: a `CascadeError` when the API rejects a request, or the exception a callback
+  raised. Other chains are unaffected. Check with `isinstance(result, CascadeError)`.
+- **A callback returning `None`** passes the previous result through, so side-effect callbacks
+  (logging, reporting) don't break the chain.
+- **`edit()` accepts a callable** as its payload; it is invoked with the previous step's result,
+  which is how a transformed asset gets written back.
+- Chains are cleared once `submit_requests()` returns, so a callback registered for one batch
+  never re-runs in the next.
+
 ### Logging
 
 `CascadeWrapperBase` accepts an optional third `debug` argument. Leaving it as `None`

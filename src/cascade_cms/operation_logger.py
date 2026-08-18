@@ -1,4 +1,5 @@
 # operation_logger.py
+import itertools
 import json
 import logging
 import sys
@@ -7,6 +8,10 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+# Distinguishes loggers built within the same second, which would otherwise
+# share one underlying logging.Logger and cross-write into each other's files.
+_logger_serial = itertools.count()
 
 
 class OperationLogger:
@@ -28,7 +33,8 @@ class OperationLogger:
         self._is_debug = debug_config is not None
         self._stack: list[str] = []          # active operation scope stack
         self._active_callback: str | None = None  # currently executing callback name
-        self._error_count = 0
+        self._error_count = 0        # cumulative, reported at exit
+        self._batch_error_count = 0  # reset per batch, shown in progress lines
         self._processed_count = 0
         self._total_count = 0
         self._start_time: datetime | None = None
@@ -52,7 +58,7 @@ class OperationLogger:
         filename = "_".join(parts) + ".log"
         log_path = log_dir / filename
 
-        logger = logging.getLogger(f"cascade.file.{timestamp}")
+        logger = logging.getLogger(f"cascade.file.{timestamp}.{next(_logger_serial)}")
         logger.propagate = False
         handler = logging.FileHandler(log_path)
         handler.setFormatter(logging.Formatter("%(message)s"))
@@ -162,17 +168,23 @@ class OperationLogger:
     # ------------------------------------------------------------------ #
 
     def set_total(self, total: int):
-        """Call before submit_requests() with len(pending_requests)."""
+        """Call before submit_requests() with the number of chains to run."""
         self._total_count = total
         self._processed_count = 0
+        self._batch_error_count = 0
 
     def log_progress(self, failed: bool = False):
-        """Call after each individual request completes."""
+        """Call after each chain finishes (successfully or not).
+
+        The count shown is for the current batch; `_error_count` keeps the
+        session total that `log_exit()` reports. Failures are counted by
+        `log_chain_error`, which runs before this for every failed chain.
+        """
         self._processed_count += 1
-        if failed:
-            self._error_count += 1
         failed_str = (
-            f" ({self._error_count} failed)" if self._error_count > 0 else ""
+            f" ({self._batch_error_count} failed)"
+            if self._batch_error_count > 0
+            else ""
         )
         self._console(
             f"Processed: {self._processed_count}/"
@@ -261,6 +273,87 @@ class OperationLogger:
         self._write(f"{pad}[response-headers]:")
         for k, v in response_headers.items():
             self._write(f"{pad}  {k}: {v}")
+
+    # ------------------------------------------------------------------ #
+    # Chain logging                                                        #
+    # ------------------------------------------------------------------ #
+
+    def log_chain_start(self, chain_index: int, asset_identifier: Any):
+        """Announce that a chain is about to walk its nodes. Debug mode only."""
+        if not self._is_debug:
+            return
+        display = self._format_identifier(asset_identifier)
+        self._write(f"> CHAIN {chain_index}: {display}")
+
+    def log_node_execution(
+        self,
+        step: int,
+        node_type: str,
+        operation_type: str | None = None,
+        callback_name: str | None = None,
+        chain_index: int | None = None,
+    ):
+        """Log one node as it executes, e.g. 'Chain 2 · Step 2: callback (validate)'.
+
+        Debug mode only, and gated on `log_operations` so a chain walk can be
+        silenced alongside the operation blocks it interleaves with. The chain
+        index matters because chains run concurrently, so their step lines are
+        interleaved in the logfile.
+        """
+        if not self._is_debug or not self._config.get("log_operations", True):
+            return
+        label = operation_type if node_type == "operation" else callback_name
+        suffix = f" ({label})" if label else ""
+        chain = f"Chain {chain_index} · " if chain_index else ""
+        self._write(f"{self._indent()}{chain}Step {step}: {node_type}{suffix}")
+
+    def log_chain_error(
+        self,
+        chain_index: int,
+        asset_identifier: Any,
+        step: int,
+        node_type: str,
+        operation_type: str | None,
+        error: Any,
+    ):
+        """Log the node that stopped a chain, with full positional context.
+
+        This is the single place chain failures are counted, for both the
+        per-batch progress line and the session total `log_exit()` reports.
+        The underlying error itself is logged separately by
+        `log_cascade_error` or `log_python_error`; this records *where* in
+        the chain it happened.
+        """
+        self._error_count += 1
+        self._batch_error_count += 1
+        display = self._format_identifier(asset_identifier)
+        label = operation_type or getattr(error, "__class__", type(error)).__name__
+        message = getattr(error, "message", None) or str(error)
+        self._console(
+            f"[ERROR]: chain {chain_index} ({display}) stopped at "
+            f"step {step} — {node_type} {label}"
+        )
+        pad = self._indent() if self._is_debug else ""
+        self._write(f"{pad}*!! chain {chain_index} stopped at step {step}")
+        self._write(f"{pad}  asset: {display}")
+        self._write(f"{pad}  node: {node_type} ({label})")
+        self._write(f"{pad}  error: {type(error).__name__}: {message}")
+        self._write(f"{pad}!!")
+
+    def log_chain_complete(
+        self,
+        chain_index: int,
+        asset_identifier: Any,
+        final_result: Any,
+    ):
+        """Log a chain that walked to its terminal node. Debug mode only."""
+        if not self._is_debug:
+            return
+        display = self._format_identifier(asset_identifier)
+        self._write(
+            f"{self._indent()}CHAIN {chain_index} complete ({display}): "
+            f"{type(final_result).__name__}"
+        )
 
     # ------------------------------------------------------------------ #
     # Error logging                                                        #

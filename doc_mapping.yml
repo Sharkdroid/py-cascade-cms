@@ -20,7 +20,7 @@ methods:
     heading: "create(payload)"
     payload_model: NewAsset
   edit:
-    heading: "edit(payload)"
+    heading: "edit(identifier, payload)"
     payload_model: null
   delete:
     heading: "delete(identifier, payload=None)"

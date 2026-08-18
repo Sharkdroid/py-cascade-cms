@@ -134,12 +134,18 @@ class RequestExecutor[T]:
                 return parsed_response._content  # type: ignore[return-value]
 
 
-# Default cache: SQLite-backed, GET-only, only caches 200 responses.
-DEFAULT_CACHECONFIG: SQLiteBackend = SQLiteBackend(
-    cache_name="./cache/cache.sqlite",
-    allowed_codes=(200,),
-    allowed_methods=("GET",),
-)
+def default_cache_backend() -> SQLiteBackend:
+    """Build the default cache backend: SQLite, GET-only, 200s only.
+
+    Constructed on demand rather than at module scope so that merely
+    importing `cascade_cms` does not create a `./cache/` directory in the
+    caller's working directory.
+    """
+    return SQLiteBackend(
+        cache_name="./cache/cache.sqlite",
+        allowed_codes=(200,),
+        allowed_methods=("GET",),
+    )
 
 
 class CascadeCMSRestDriver:
@@ -195,9 +201,13 @@ class CascadeCMSRestDriver:
 
         self.cache: CacheHandler
         if backendConfig is None:
-            self.cache = CacheHandler(DEFAULT_CACHECONFIG)
+            self.cache = CacheHandler(default_cache_backend())
         else:
             self.cache = CacheHandler(SQLiteBackend(**backendConfig))
+
+        # Shared across every chain running on this driver, so concurrency
+        # stays bounded no matter how many chains are in flight at once.
+        self._semaphore = asyncio.Semaphore(self.MAX_REQUESTS)
 
         async def _create_session():
             return ClientSession(headers=headers)
@@ -207,55 +217,68 @@ class CascadeCMSRestDriver:
     def _build_url(self, *segments):
         return "/".join([self.base_url, *map(str, segments)])
 
-    async def process_executors(self) -> list[CascadeObjects]:
-        """Run all pending requests concurrently and collect their results.
+    async def execute_requests(
+        self,
+        requests: list[RequestExecutor],
+    ) -> list[Any]:
+        """Run the given requests concurrently and return their results in order.
 
-        Concurrency is bounded by `MAX_REQUESTS` via a semaphore. Requests
-        that raise a Python exception or return a `CascadeError` are logged
-        and excluded from the returned list, so only successfully parsed
-        results are returned (order is completion order, not submission
-        order, since results are gathered via `asyncio.as_completed`).
+        This is the single execution core: operation chains await it directly,
+        and `process_executors()` routes `pending_requests` through it.
+
+        Concurrency is bounded by `MAX_REQUESTS` via a driver-wide semaphore,
+        so many chains running at once still cannot exceed that ceiling.
+        Unlike a plain `gather`, results line up **one-for-one with `requests`**
+        in submission order, and a request that raises returns the exception
+        object in its slot rather than being dropped — chains rely on that to
+        report which step failed.
+
+        Args:
+            requests: The requests to execute.
 
         Returns:
-            The list of successfully parsed response objects.
+            One entry per request, in the same order: the parsed response, a
+            `CascadeError`, or the `Exception` the request raised.
         """
-        if self._logger:
-            self._logger.set_total(len(self.pending_requests))
 
-        sem = asyncio.Semaphore(self.MAX_REQUESTS)
-
-        async def _run(executor: RequestExecutor) -> CascadeObjects | None:
+        async def _run(executor: RequestExecutor) -> Any:
             try:
                 result = await executor.fetch(
-                    self.session, sem, self.cache, self._logger
+                    self.session, self._semaphore, self.cache, self._logger
                 )
-            except Exception as exc:  # noqa: BLE001 - isolate one request's failure from the batch
+            except Exception as exc:  # noqa: BLE001 - surfaced as a value, see docstring
                 if self._logger:
                     self._logger.log_python_error(exc)
-                    self._logger.log_progress(failed=True)
-                return None
+                return exc
 
-            failed = isinstance(result, CascadeError)
-            if failed and self._logger:
+            if isinstance(result, CascadeError) and self._logger:
                 self._logger.log_cascade_error(result.message, executor.identifier)
-            if self._logger:
-                self._logger.log_progress(failed=failed)
             return result
 
-        coros = [_run(executor) for executor in self.pending_requests]
-        processed_results: list[CascadeObjects] = []
-        for next_request in asyncio.as_completed(coros):
-            result = await next_request
-            if result is not None:
-                processed_results.append(result)
-        return processed_results
+        return list(await asyncio.gather(*(_run(request) for request in requests)))
 
-    def _submitRequests(self) -> list[CascadeObjects]:
-        """Run the event loop to completion for all pending requests.
+    async def process_executors(self) -> list[CascadeObjects]:
+        """Run all pending requests concurrently and collect their results."""
+        return await self.execute_requests(self.pending_requests)
 
-        Blocks until every queued request finishes, then clears
-        `pending_requests` so the driver is ready for the next batch.
+    def _submitRequests(
+        self,
+        requests: list[RequestExecutor] | None = None,
+    ) -> list[Any]:
+        """Run the event loop to completion for a batch of requests.
+
+        Blocks until every request finishes.
+
+        Args:
+            requests: The requests to execute. When omitted, the driver's
+                `pending_requests` queue is used and cleared afterwards.
+
+        Returns:
+            One entry per request, in submission order.
         """
+        if requests is not None:
+            return self.eventLoop.run_until_complete(self.execute_requests(requests))
+
         res = self.eventLoop.run_until_complete(self.process_executors())
         self.pending_requests.clear()
         return res
