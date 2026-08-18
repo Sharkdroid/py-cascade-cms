@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import (
     Annotated,
     Any,
+    ClassVar,
     Literal,
     NotRequired,
     Self,
@@ -577,7 +578,7 @@ class Asset:
     # asset_type re-cased (e.g. "dataDefinition" for a "datadefinition"
     # request), but not always: this handles the exceptions where the
     # wrapper key isn't a mechanical re-casing of the request-side type.
-    _ASSET_TYPE_KEY_ALIASES: "dict[str, str]" = {
+    _ASSET_TYPE_KEY_ALIASES: ClassVar[dict[str, str]] = {
         "scriptformat": "format",
     }
 
@@ -663,7 +664,7 @@ class Asset:
     # Field names Cascade exposes on a site asset for the root container of
     # each asset type. Only asset types confirmed against a real site payload
     # are listed here; unmapped types return None rather than guess.
-    _ROOT_CONTAINER_FIELDS: "dict[str, str]" = {
+    _ROOT_CONTAINER_FIELDS: ClassVar[dict[str, str]] = {
         "datadefinition": "rootDataDefinitionContainerId",
         "sharedfield": "rootSharedFieldContainerId",
         "folder": "rootFolderId",

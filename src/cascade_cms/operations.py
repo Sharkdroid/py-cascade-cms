@@ -841,9 +841,8 @@ class OperationChain:
         progress: bool = False,
     ) -> Any:
         """Log the stopping node and hand the error back as the chain result."""
-        if isinstance(error, Exception) and not isinstance(error, CascadeError):
-            if self._logger:
-                self._logger.log_python_error(error)
+        if isinstance(error, Exception) and not isinstance(error, CascadeError) and self._logger:
+            self._logger.log_python_error(error)
         self._log_stop(step, node, error)
         if progress and self._logger:
             self._logger.log_progress(failed=True)

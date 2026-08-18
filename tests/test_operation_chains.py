@@ -13,7 +13,13 @@ from uuid import UUID
 import pytest
 
 from cascade_cms import CascadeWrapperBase
-from cascade_cms.cmstypes import Asset, CascadeError, CascadeSuccess, IdentifierType, Path
+from cascade_cms.cmstypes import (
+    Asset,
+    CascadeError,
+    CascadeSuccess,
+    IdentifierType,
+    Path,
+)
 from cascade_cms.driver import CascadeCMSRestDriver
 from cascade_cms.operation_logger import OperationLogger
 from cascade_cms.operations import Node, OperationChain, Operations
