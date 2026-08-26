@@ -2,13 +2,23 @@ import asyncio
 import os
 import sys
 from concurrent.futures import Executor
-from typing import Any, TypeVar, overload
+from typing import Any, TypedDict, TypeVar, overload
 
-from .driver import CascadeCMSRestDriver, CascadeObjects
+from .cmstypes import CascadeError, CascadeObjects
+from .driver import CascadeCMSRestDriver
 from .operation_logger import OperationLogger
 from .operations import OperationChain, Operations
 
 T = TypeVar("T")
+
+
+class EnvironmentVars(TypedDict):
+    """Required keys for `CascadeWrapperBase`'s `environmentVariables` argument."""
+
+    SERVER: str
+    API_KEY: str
+    CASCADE_URL: str
+
 
 class CascadeWrapperBase:
     """Context-manager entry point tying together the logger, REST driver,
@@ -25,8 +35,8 @@ class CascadeWrapperBase:
 
     def __init__(
         self,
-        environmentVariables: dict[str, str],
-        configurationVariables: dict[str, Any],
+        environmentVariables: EnvironmentVars,
+        configurationVariables: dict[str, Any] | None,
         debug: dict[str, Any] | None = None,
     ):
         """Initialize the logger, driver, and operations builder.
@@ -65,7 +75,7 @@ class CascadeWrapperBase:
         """
         try:
             self._logger.log_exit()
-            return self._driver.close()
+            self._driver.close()
         except Exception as e:  # noqa: BLE001 - log cleanup failure without masking the original exception
             self._logger.log_python_error(e)
 
@@ -114,14 +124,13 @@ class CascadeWrapperBase:
         Returns:
             One entry per chain: its final result, or the error that stopped it.
         """
-        self._logger.log_running(os.path.basename(sys.argv[0]))
         chains = list(self.operations._chains)
         if not chains:
             return []
 
-        self._logger.set_total(len(chains))
+        self._logger.log_batch_start()
         try:
-            return self._driver.eventLoop.run_until_complete(
+            results = self._driver.eventLoop.run_until_complete(
                 self._execute_chains(chains, executor)
             )
         except Exception as e:  # noqa: BLE001 - top-level entry point must not raise; log and return empty
@@ -129,6 +138,10 @@ class CascadeWrapperBase:
             return []
         finally:
             self.operations._reset_chains()
+
+        succeeded = sum(1 for r in results if not isinstance(r, CascadeError | Exception))
+        self._logger.log_batch_end(succeeded, len(chains))
+        return results
 
     async def _execute_chains(
         self,

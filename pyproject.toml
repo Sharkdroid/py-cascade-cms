@@ -1,10 +1,10 @@
 [build-system]
-requires = ["hatchling<0.30"]
+requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
 name = "cascade-cms-rest"
-version = "3.0.1"
+version = "3.1.0"
 description = "A typed, async REST client for Hannon Hill Cascade CMS"
 readme = "README.md"
 license = "MIT"
@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "pytest-asyncio", "mypy", "ruff", "build", "twine", "google-generativeai"]
+dev = ["pytest", "pytest-asyncio", "mypy", "ruff", "build", "twine>=7.0.0"]
 
 [project.urls]
 Homepage = "https://github.com/Sharkdroid/py-cascade-cms"
@@ -35,4 +35,12 @@ packages = ["src/cascade_cms"]
 exclude = [
     "skill/cascade-script-writer",
     "skill/cascade-script-writer-lite",
+    # Manual human-run scripts against a live Cascade instance (see their own
+    # docstrings) — not library code or automated tests, so lint rules aimed
+    # at production code (narrow excepts, custom exception types, ...) don't
+    # apply. tests/conftest.py also excludes these from pytest collection,
+    # since their *_test.py names would otherwise make pytest import (and
+    # execute) them as test modules.
+    "tests/edit_test.py",
+    "tests/testing.py",
 ]

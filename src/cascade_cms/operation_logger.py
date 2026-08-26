@@ -1,10 +1,40 @@
 # operation_logger.py
+"""Owns all console, logfile, and (verbose mode) request/response file output
+for the cascade_cms library.
+
+Rendering model (design doc `chain-node-and-logger-design.md` Part 2 / the
+pass-2 rework decision log):
+
+- One line per chain: `(uuid_or_path, asset_type) OP1 -> fn_name: Type -> ...`,
+  built via `ChainLineBuilder` and produced by `OperationLogger.flush_chain`/
+  `flush_chain_error`.
+- Lines are built incrementally in memory as a chain executes (append_step()
+  per node, reflecting real step-by-step progress — a hang mid-chain could
+  still be introspected via render_in_progress()), but are only written to
+  the console/logfile once, at the point the chain finishes or stops. Chains
+  run concurrently, so a true live in-place redraw of N lines is not
+  practical in a scrolling console or an append-only logfile; write-once
+  avoids that without losing the incremental-construction property.
+- `[METHOD] URL` request/response detail lines and the raw request/response
+  JSON files are verbose (debug) mode only, and never inline a payload.
+- Two modes, controlled solely by whether `debug_config` is `None`:
+    - Normal (debug_config=None): minimal console, simple logfile.
+    - Debug (debug_config=dict): quiet console, verbose logfile plus the
+      per-request JSON files.
+  There is no longer a separate "log operations vs. callbacks vs. responses"
+  toggle — `_is_debug` is the single on/off switch for verbose behavior.
+
+Recognized `debug_config` keys:
+    log_dir              — directory for the logfile and (verbose mode)
+                            request/response JSON files. Default "./logs".
+    show_network_headers — verbose mode only: also log request/response
+                            HTTP headers.
+"""
 import itertools
 import json
 import logging
 import sys
 import traceback
-from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -14,42 +44,152 @@ from typing import Any
 _logger_serial = itertools.count()
 
 
-class OperationLogger:
+def _format_chain_identifier(identifier: Any) -> str:
+    """Render the `(uuid_or_path, asset_type)` prefix for a chain's line.
+
+    Adapted from the old logger's `_format_identifier`: same dual
+    IdentifierType/Path/dict handling, but the output shape changes, and so
+    does the priority — an `IdentifierType` always shows its UUID here (even
+    when path info is also available on it), and only a `Path`-only
+    reference (no UUID at all) falls back to showing the path string in the
+    same position, still paired with the asset type.
     """
-    Owns all console and logfile output for the cascade_cms library.
+    if identifier is None:
+        return "NONE, ?"
+    if hasattr(identifier, "get_id") and identifier.get_id:
+        return f"{identifier.get_id}, {identifier.get_type}"
+    if hasattr(identifier, "get_path") and identifier.get_path:
+        return f"{identifier.get_path}, {identifier.get_type}"
+    if isinstance(identifier, dict):
+        path = identifier.get("path")
+        asset_type = identifier.get("asset_type", "?")
+        if path:
+            return f"{path}, {asset_type}"
+    return f"{identifier}, ?"
 
-    Two modes:
-      - Normal (debug_config=None): minimal console, simple logfile.
-      - Debug  (debug_config=dict): quiet console, verbose nested logfile.
 
-    Depth tracking for nested operation scopes is managed internally via
-    a stack. Callers use operation_scope() as a context manager — they
-    never touch _stack directly.
+class ChainLineBuilder:
+    """Accumulates one chain's pipeline-line segments as its nodes execute.
+
+    Owns only this line's in-progress state (an identifier prefix and an
+    ordered list of completed segment strings) and has no dependency on
+    operations.py's `Node`/`OperationChain` shape — it's driven purely by
+    primitive arguments, so it is usable and testable standalone. What each
+    segment's label *is* (a bare operation name, `fn_name: ReturnType`, ...)
+    is entirely the caller's decision (see pass-3 wiring); this class only
+    joins and aligns whatever labels it's given.
+    """
+
+    def __init__(self) -> None:
+        self.identifier: str = ""
+        self._segments: list[str] = []
+
+    def start(self, identifier: Any) -> None:
+        """Resolve and store the `(uuid_or_path, asset_type)` line prefix."""
+        self.identifier = _format_chain_identifier(identifier)
+
+    def append_step(self, label: str) -> None:
+        """Append one segment — an operation name or a `fn_name: Type` label."""
+        self._segments.append(label)
+
+    def render_in_progress(self) -> str:
+        """The line as it stands, with a trailing arrow — not yet finished.
+
+        Exposed for introspection of a chain that is still executing (e.g. a
+        hang mid-chain); the normal success/error flush paths use
+        `render_complete()`/`render_error()` instead, since by the time a
+        chain finishes or stops it is no longer "in progress".
+        """
+        body = " -> ".join(self._segments)
+        prefix = f"({self.identifier}) "
+        return f"{prefix}{body} -> " if body else f"{prefix}-> "
+
+    def render_complete(self) -> str:
+        """The finished (or stopped) line's text, with no trailing arrow."""
+        return f"({self.identifier}) {' -> '.join(self._segments)}"
+
+    def render_error(
+        self,
+        failing_step_index: int,
+        message: str,
+        file: str,
+        line: int,
+    ) -> tuple[str, str]:
+        """The `v` marker and `!ERROR:` block for a failure at `failing_step_index`.
+
+        `failing_step_index` indexes into the segments already appended via
+        `append_step()` — the failing step's own (possibly unresolved) label
+        is expected to already be present at that index (e.g. an operation's
+        bare name, appended when its request was issued — see pass-3 wiring)
+        so the column below aligns under its first character.
+
+        The column is computed by reconstructing the line's literal text up
+        to (not including) that label and measuring its length: each " -> "
+        separator is 4 characters (both surrounding spaces), not 2 — the
+        most likely source of an off-by-one here.
+
+        A multi-line `message` keeps every continuation line at the same
+        indentation as the first (no progressive indent); `@{file}:{line}`
+        is appended to the last line of the message.
+        """
+        prefix = f"({self.identifier}) "
+        preceding = self._segments[:failing_step_index]
+        reconstructed = prefix + " -> ".join(preceding)
+        if preceding:
+            reconstructed += " -> "
+        column = len(reconstructed)
+        indent = " " * column
+
+        message_lines = message.splitlines() or [""]
+        last_index = len(message_lines) - 1
+        error_lines = [
+            f"{indent}{'!ERROR: ' if i == 0 else ''}{text}"
+            f"{f' @{file}:{line}' if i == last_index else ''}"
+            for i, text in enumerate(message_lines)
+        ]
+        return f"{indent}v", "\n".join(error_lines)
+
+
+class OperationLogger:
+    """Owns all console and logfile output for the cascade_cms library.
+
+    See the module docstring for the two modes and the write-once-per-chain
+    rendering decision.
     """
 
     def __init__(self, server: str, debug_config: dict | None = None):
         self._server = server
         self._config: dict[str, Any] = debug_config if debug_config is not None else {}
         self._is_debug = debug_config is not None
-        self._stack: list[str] = []          # active operation scope stack
-        self._active_callback: str | None = None  # currently executing callback name
-        self._error_count = 0        # cumulative, reported at exit
-        self._batch_error_count = 0  # reset per batch, shown in progress lines
-        self._processed_count = 0
-        self._total_count = 0
+        self._error_count = 0  # cumulative across every batch, reported at exit
+        self._processed_count = 0  # cumulative across every batch
         self._start_time: datetime | None = None
         self._script_name: str = ""
 
         self._file_logger = self._setup_file_logger()
         self._console_logger = self._setup_console_logger()
 
+    @property
+    def is_debug(self) -> bool:
+        """Whether this logger is in verbose (debug) mode.
+
+        Pass-3 integration seam: callers (operations.py, driver.py) need
+        this to decide whether it's worth doing verbose-only work (e.g.
+        serializing a payload to reference its file) *before* calling into
+        logger methods that already no-op internally outside debug mode —
+        this just avoids paying that cost for nothing in normal mode.
+        """
+        return self._is_debug
+
     # ------------------------------------------------------------------ #
     # Setup                                                                #
     # ------------------------------------------------------------------ #
 
+    def _log_dir(self) -> Path:
+        return Path(self._config.get("log_dir", "./logs"))
+
     def _setup_file_logger(self) -> logging.Logger:
-        log_dir = Path(self._config.get("log_dir", "./logs")) \
-            if self._is_debug else Path("./logs")
+        log_dir = self._log_dir() if self._is_debug else Path("./logs")
         log_dir.mkdir(parents=True, exist_ok=True)
 
         timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H-%M-%S")
@@ -77,57 +217,6 @@ class OperationLogger:
         return logger
 
     # ------------------------------------------------------------------ #
-    # Depth / indent helpers                                               #
-    # ------------------------------------------------------------------ #
-
-    @property
-    def _depth(self) -> int:
-        return len(self._stack)
-
-    def _indent(self) -> str:
-        """Pipe indent for lines inside an operation block."""
-        if self._depth == 0:
-            return "| "
-        return "|  " * self._depth + "| "
-
-    def _op_prefix(self) -> str:
-        """Prefix for the operation header line."""
-        if self._depth == 0:
-            return "> "
-        return "|  " * (self._depth - 1) + "|---> "
-
-    # ------------------------------------------------------------------ #
-    # Context manager                                                      #
-    # ------------------------------------------------------------------ #
-
-    @contextmanager
-    def operation_scope(self, operation_name: str):
-        """
-        Push operation onto the depth stack for the duration of the block.
-        Always pops on exit, even on exception.
-        Writes END OF REQUEST marker when returning to root depth (debug only).
-        """
-        self._stack.append(operation_name)
-        try:
-            yield
-        finally:
-            self._stack.pop()
-            if self._is_debug and self._depth == 0:
-                self._write(">" * 22 + " END OF REQUEST " + "<" * 22 + "\n")
-
-    @contextmanager
-    def callback_scope(self, callback_name: str):
-        """
-        Track the currently executing callback so nested operations can
-        annotate themselves with (via <callback_name>).
-        """
-        self._active_callback = callback_name
-        try:
-            yield
-        finally:
-            self._active_callback = None
-
-    # ------------------------------------------------------------------ #
     # Session lifecycle                                                    #
     # ------------------------------------------------------------------ #
 
@@ -140,10 +229,6 @@ class OperationLogger:
             if self._config.get("show_network_headers"):
                 self._write("[INPUTS-CONFIGS]:")
                 self._write(f"CASCADE_URL={cascade_url}")
-
-    def log_running(self, script_name: str):
-        if not self._is_debug:
-            self._console(f"[RUNNING]: {script_name}")
 
     def log_exit(self):
         elapsed = (
@@ -164,291 +249,162 @@ class OperationLogger:
         self._console("[EXIT]: Disconnecting from " + self._server)
 
     # ------------------------------------------------------------------ #
-    # Progress                                                             #
+    # Batch framing — brackets one submit_requests() call                 #
     # ------------------------------------------------------------------ #
 
-    def set_total(self, total: int):
-        """Call before submit_requests() with the number of chains to run."""
-        self._total_count = total
-        self._processed_count = 0
-        self._batch_error_count = 0
+    def log_batch_start(self) -> None:
+        """Bracket the start of one `submit_requests()` batch.
 
-    def log_progress(self, failed: bool = False):
-        """Call after each chain finishes (successfully or not).
-
-        The count shown is for the current batch; `_error_count` keeps the
-        session total that `log_exit()` reports. Failures are counted by
-        `log_chain_error`, which runs before this for every failed chain.
+        A script may call `submit_requests()` multiple times in one
+        session, each getting its own start/end pair — this is
+        deliberately separate from the session-level `log_init`/`log_exit`.
         """
-        self._processed_count += 1
-        failed_str = (
-            f" ({self._batch_error_count} failed)"
-            if self._batch_error_count > 0
-            else ""
-        )
-        self._console(
-            f"Processed: {self._processed_count}/"
-            f"{self._total_count}{failed_str}"
-        )
-
-    # ------------------------------------------------------------------ #
-    # Operation logging                                                    #
-    # ------------------------------------------------------------------ #
-
-    def log_operation(
-        self,
-        name: str,
-        url: str,
-        payload: Any,
-        parser: Any,
-        identifier: Any,
-    ):
-        """
-        Write operation header to logfile.
-        In debug mode: full block with URL, payload, parser, identifier.
-        In normal mode: single [OPERATION]: path/id line.
-        """
-        display = self._format_identifier(identifier)
-
         if self._is_debug:
-            if not self._config.get("log_operations", True):
-                return
-            origin = (
-                f" (via {self._active_callback})"
-                if self._active_callback else ""
-            )
-            prefix = self._op_prefix()
-            pad = self._indent()
-            self._write(f"{prefix}{name}{origin}:")
-            self._write(f"{pad}[URL]: {url}")
-            if self._config.get("show_payload_data", True):
-                payload_str = str(payload) if payload is not None else "NONE"
-                self._write(f"{pad}[payload]: {payload_str}")
-            parser_name = getattr(parser, "__name__", "NONE") if parser else "NONE"
-            self._write(f"{pad}[parser]: {parser_name}")
-            self._write(f"{pad}[identifier]: {display}")
+            self._write(">>>> START REQUEST <<<<")
         else:
-            self._write(f"[{name}]: {display}")
+            self._console(f"[RUNNING]: {self._script_name}")
 
-    def log_response(self, raw: bytes):
-        """Write response body to logfile. Debug mode only."""
-        if not self._is_debug or not self._config.get("log_responses", True):
-            return
-        pad = self._indent()
-        limit = self._config.get("response_line_limit", 8)
-        divider = "=" * 25
-        self._write(f"{pad}{divider} (RESPONSE) {divider}")
-        text = raw.decode(errors="replace")
-        try:
-            text = json.dumps(json.loads(text), indent=2)
-        except ValueError:
-            pass
-        lines = text.splitlines()
-        if limit == -1 or len(lines) <= limit:
-            for line in lines:
-                self._write(f"{pad}{line}")
-        else:
-            for line in lines[:limit]:
-                self._write(f"{pad}{line}")
-            self._write(f"{pad}... (truncated at {limit} lines)")
+    def log_batch_end(self, succeeded: int, total: int) -> None:
+        """Close one batch's bracket and report its tally.
 
-    def log_callbacks(self, callbacks: list):
-        """Write callback chain line. Debug mode only."""
-        if not self._is_debug or not self._config.get("log_callbacks", True):
+        `succeeded`/`total` are supplied by the caller (already known from
+        the batch's own results) rather than tracked incrementally here, so
+        this is the single place both the per-batch and the running
+        session-total (`log_exit`) counts are updated.
+        """
+        self._processed_count += total
+        self._error_count += total - succeeded
+        self._console(f"{succeeded}/{total} succeeded")
+        if self._is_debug:
+            self._write(f"{succeeded}/{total} succeeded")
+            self._write(">>>> END REQUEST <<<<")
+
+    # ------------------------------------------------------------------ #
+    # Chain line flushing (write-once-per-chain)                          #
+    # ------------------------------------------------------------------ #
+
+    def flush_chain(self, builder: ChainLineBuilder) -> None:
+        """Write a chain's finished (successful) line to the logfile."""
+        self._write(builder.render_complete())
+
+    def flush_chain_error(
+        self,
+        builder: ChainLineBuilder,
+        failing_step_index: int,
+        message: str,
+        file: str,
+        line: int,
+    ) -> None:
+        """Write a stopped chain's line plus its `v`/`!ERROR:` block.
+
+        Writes the pipeline text (via `render_complete()`, since the
+        failing step's own label is already the last appended segment —
+        see `ChainLineBuilder.render_error`) followed by the alignment
+        block, all in one flush.
+        """
+        self._write(builder.render_complete())
+        v_line, error_block = builder.render_error(failing_step_index, message, file, line)
+        self._write(v_line)
+        self._write(error_block)
+
+    # ------------------------------------------------------------------ #
+    # Request/response detail (verbose mode)                              #
+    # ------------------------------------------------------------------ #
+
+    def log_request_detail(
+        self, method: str, url: str, payload_ref: str | None = None
+    ) -> None:
+        """Write `[METHOD] URL`, once per server-touching operation.
+
+        Debug-mode only — normal mode's logfile is just the one pipeline
+        line per chain (from `flush_chain`/`flush_chain_error`) plus the
+        batch tally; per-request detail is reserved for verbose output.
+        No payload is ever inlined here, in any mode.
+        """
+        if not self._is_debug:
             return
-        pad = self._indent()
-        chain = " >> ".join(
-            getattr(cb, "__name__", repr(cb)) for cb in callbacks
-        )
-        self._write(f"{pad}[callbacks]: {chain}")
+        line = f"[{method}] {url}"
+        if payload_ref is not None:
+            line += f" | payload: {payload_ref}"
+        self._write(line)
+
+    def _write_json_file(self, filename: str, data: Any) -> None:
+        log_dir = self._log_dir()
+        log_dir.mkdir(parents=True, exist_ok=True)
+        (log_dir / filename).write_text(json.dumps(data, indent=2))
+
+    @staticmethod
+    def _parse_json_ish(data: bytes | str | dict) -> Any:
+        if isinstance(data, dict):
+            return data
+        return json.loads(data)
+
+    def write_request_file(self, uuid: str, payload: bytes | dict) -> None:
+        """Write `{uuid}_request.json` to the logs folder. Verbose mode only."""
+        if not self._is_debug:
+            return
+        self._write_json_file(f"{uuid}_request.json", self._parse_json_ish(payload))
+
+    def write_response_file(self, uuid: str, response: bytes | dict) -> None:
+        """Write `{uuid}_response.json` to the logs folder. Verbose mode only.
+
+        Skipped for a trivial success/fail shape — a dict whose keys are a
+        subset of `{"success", "message"}` — since that carries no
+        information beyond what the chain line already shows.
+        """
+        if not self._is_debug:
+            return
+        parsed = self._parse_json_ish(response)
+        if isinstance(parsed, dict) and set(parsed.keys()) <= {"success", "message"}:
+            return
+        self._write_json_file(f"{uuid}_response.json", parsed)
 
     def log_network_headers(self, request_headers: dict, response_headers: dict):
-        """Write network header info. Debug mode + show_network_headers only."""
+        """Write network header info. Verbose mode + show_network_headers only."""
         if not self._is_debug or not self._config.get("show_network_headers", False):
             return
-        pad = self._indent()
-        self._write(f"{pad}[request-headers]:")
+        self._write("[request-headers]:")
         for k, v in request_headers.items():
-            self._write(f"{pad}  {k}: {v}")
-        self._write(f"{pad}[response-headers]:")
+            self._write(f"  {k}: {v}")
+        self._write("[response-headers]:")
         for k, v in response_headers.items():
-            self._write(f"{pad}  {k}: {v}")
+            self._write(f"  {k}: {v}")
 
     # ------------------------------------------------------------------ #
-    # Chain logging                                                        #
+    # Error logging (chain-agnostic entry points)                         #
     # ------------------------------------------------------------------ #
 
-    def log_chain_start(self, chain_index: int, asset_identifier: Any):
-        """Announce that a chain is about to walk its nodes. Debug mode only."""
-        if not self._is_debug:
-            return
-        display = self._format_identifier(asset_identifier)
-        self._write(f"> CHAIN {chain_index}: {display}")
+    def log_cascade_error(self, message: str, identifier: Any) -> None:
+        """Log a CascadeError (API-level failure) outside of chain context.
 
-    def log_node_execution(
-        self,
-        step: int,
-        node_type: str,
-        operation_type: str | None = None,
-        callback_name: str | None = None,
-        chain_index: int | None = None,
-    ):
-        """Log one node as it executes, e.g. 'Chain 2 · Step 2: callback (validate)'.
-
-        Debug mode only, and gated on `log_operations` so a chain walk can be
-        silenced alongside the operation blocks it interleaves with. The chain
-        index matters because chains run concurrently, so their step lines are
-        interleaved in the logfile.
+        Thin wrapper per the design (chain-level failures normally go
+        through `flush_chain_error`, which has step-index context this
+        doesn't) — kept as a standalone entry point for a request-level
+        failure with no enclosing chain line.
         """
-        if not self._is_debug or not self._config.get("log_operations", True):
-            return
-        label = operation_type if node_type == "operation" else callback_name
-        suffix = f" ({label})" if label else ""
-        chain = f"Chain {chain_index} · " if chain_index else ""
-        self._write(f"{self._indent()}{chain}Step {step}: {node_type}{suffix}")
-
-    def log_chain_error(
-        self,
-        chain_index: int,
-        asset_identifier: Any,
-        step: int,
-        node_type: str,
-        operation_type: str | None,
-        error: Any,
-    ):
-        """Log the node that stopped a chain, with full positional context.
-
-        This is the single place chain failures are counted, for both the
-        per-batch progress line and the session total `log_exit()` reports.
-        The underlying error itself is logged separately by
-        `log_cascade_error` or `log_python_error`; this records *where* in
-        the chain it happened.
-        """
-        self._error_count += 1
-        self._batch_error_count += 1
-        display = self._format_identifier(asset_identifier)
-        label = operation_type or getattr(error, "__class__", type(error)).__name__
-        message = getattr(error, "message", None) or str(error)
-        self._console(
-            f"[ERROR]: chain {chain_index} ({display}) stopped at "
-            f"step {step} — {node_type} {label}"
-        )
-        pad = self._indent() if self._is_debug else ""
-        self._write(f"{pad}*!! chain {chain_index} stopped at step {step}")
-        self._write(f"{pad}  asset: {display}")
-        self._write(f"{pad}  node: {node_type} ({label})")
-        self._write(f"{pad}  error: {type(error).__name__}: {message}")
-        self._write(f"{pad}!!")
-
-    def log_chain_complete(
-        self,
-        chain_index: int,
-        asset_identifier: Any,
-        final_result: Any,
-    ):
-        """Log a chain that walked to its terminal node. Debug mode only."""
-        if not self._is_debug:
-            return
-        display = self._format_identifier(asset_identifier)
-        self._write(
-            f"{self._indent()}CHAIN {chain_index} complete ({display}): "
-            f"{type(final_result).__name__}"
-        )
-
-    # ------------------------------------------------------------------ #
-    # Error logging                                                        #
-    # ------------------------------------------------------------------ #
-
-    def log_cascade_error(self, message: str, identifier: Any):
-        """
-        Log a CascadeError (API-level failure, e.g. asset not found).
-        Console: [ERROR]: ErrorType — check log
-        Logfile: [ERROR]: path + structured block
-        """
-        display = self._format_identifier(identifier)
+        display = _format_chain_identifier(identifier)
         self._console("[ERROR]: CascadeError — check log")
+        self._write(f"({display})")
+        self._write("v")
+        self._write(f"!ERROR: {message}")
 
-        if self._is_debug:
-            pad = self._indent()
-            self._write(f"{pad}")
-            self._write(f"*!! CascadeError: {message}")
-            self._write(f"  asset: {display}")
-            self._write("!!")
-        else:
-            self._write(f"[ERROR]: {display}")
-            self._write("  Error Type: CascadeError")
-            self._write(f"  Error Message: {message}")
-
-    def log_python_error(self, exc: Exception):
-        """
-        Log a Python exception.
-
-        Normal mode: type + message only (no traceback, no variables).
-        Debug mode:  type + message + origin file + function + line +
-                     local variable snapshot from the failing frame.
-                     Variable snapshot is controlled by show_error_variables.
-
-        Console (both modes): error type + 'check log for details'
-        """
+    def log_python_error(self, exc: Exception) -> None:
+        """Log a Python exception outside of chain context. See `log_cascade_error`."""
         exc_type = type(exc).__name__
         exc_msg = str(exc)
         self._console(f"[ERROR]: {exc_type} — check log")
 
-        if self._is_debug:
-            tb = traceback.extract_tb(exc.__traceback__)
-            frame_info = tb[-1] if tb else None
-            frame_locals = (
-                exc.__traceback__.tb_frame.f_locals
-                if exc.__traceback__ else {}
-            )
-            pad = self._indent()
-            self._write(f"{pad}")
-            self._write(f"*!! {exc_type}: {exc_msg}")
-            if frame_info:
-                self._write(f"  origin:   {Path(frame_info.filename).name}")
-                self._write(f"  function: {frame_info.name}")
-                self._write(f"  line {frame_info.lineno}: {frame_info.line}")
-            if self._config.get("show_error_variables", True) and frame_locals:
-                self._write("  variables:")
-                for k, v in frame_locals.items():
-                    self._write(
-                        f"    {k:<10} = {v!r}  ({type(v).__name__})"
-                    )
-            self._write("!!")
-        else:
-            self._write("[ERROR]:")
-            self._write(f"  Error Type: {exc_type}")
-            self._write(f"  Error Message: {exc_msg}")
+        tb = traceback.extract_tb(exc.__traceback__)
+        frame_info = tb[-1] if tb else None
+        file_name = Path(frame_info.filename).name if frame_info else "?"
+        line_no = frame_info.lineno if frame_info else 0
+
+        self._write("v")
+        self._write(f"!ERROR: {exc_type}: {exc_msg} @{file_name}:{line_no}")
 
     # ------------------------------------------------------------------ #
     # Helpers                                                              #
     # ------------------------------------------------------------------ #
-
-    def _format_identifier(self, identifier: Any) -> str:
-        """
-        Resolve an identifier to a human-readable string for log output.
-
-        Priority:
-          1. Path string if available (e.g. mySite/blog/post-1)
-          2. ID + asset type as fallback (e.g. a3f9bc... (folder))
-          3. 'NONE' if identifier is None
-        """
-        if identifier is None:
-            return "NONE"
-        # IdentifierType instance
-        if hasattr(identifier, "get_path") and identifier.get_path:
-            site = identifier.get_sitename or ""
-            path = identifier.get_path or ""
-            return f"{site}/{path}".strip("/")
-        if hasattr(identifier, "get_id") and identifier.get_id:
-            return f"{identifier.get_id[:8]}... ({identifier.get_type})"
-        # Path dict
-        if isinstance(identifier, dict):
-            site = identifier.get("siteName", "")
-            path = identifier.get("path", "")
-            if path:
-                return f"{site}/{path}".strip("/")
-        return str(identifier)
 
     def _write(self, line: str):
         """Write a line to the logfile."""

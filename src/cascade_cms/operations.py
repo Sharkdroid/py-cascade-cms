@@ -1,4 +1,6 @@
 import asyncio
+import os
+import traceback
 from collections.abc import Callable
 from concurrent.futures import Executor
 from dataclasses import dataclass, field
@@ -21,6 +23,7 @@ from .cmstypes import (
     auditParameters,
     copyParameters,
     deleteParameters,
+    identifier_from_asset,
     moveParameters,
     parse_access_rights,
     parse_assets,
@@ -34,12 +37,13 @@ from .cmstypes import (
     preference,
     publishInformation,
     resolve_identifier,
+    serialize_payload,
     set_checkedout,
     workflowSettingsPayload,
     workflowTransitionInformation,
 )
 from .driver import CascadeCMSRestDriver, RequestExecutor
-from .operation_logger import OperationLogger
+from .operation_logger import ChainLineBuilder, OperationLogger
 
 NodeType = Literal["operation", "callback"]
 HTTPMethod = Literal["GET", "POST", "PUT"]
@@ -59,6 +63,9 @@ class Node:
     callback_fn: Callable[[Any], Any] | None = None
     operation_data: dict[str, Any] | None = None
     next: "Node | None" = None
+    input: Any = None
+    output: Any = None
+    context: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def operation(cls, op_type: str, op_data: dict[str, Any]) -> "Node":
@@ -92,7 +99,7 @@ class OperationChain:
     `submit_requests()` runs them all concurrently.
 
     Example:
-        cascade.operations.read(identifier).then(rewrite).edit(identifier, build_payload)
+        cascade.operations.read(identifier).then(rewrite).edit(build_payload)
     """
 
     _driver: CascadeCMSRestDriver
@@ -101,6 +108,7 @@ class OperationChain:
     _logger: OperationLogger | None = None
     _asset_identifier: IdentifierType | Path | None = None
     _index: int = 0
+    _line: ChainLineBuilder = field(default_factory=ChainLineBuilder)
 
     # ------------------------------------------------------------------ #
     # Chain building                                                       #
@@ -136,6 +144,14 @@ class OperationChain:
         `requests` is None only when the requests cannot be built until the
         chain runs (a callable payload), in which case `builder` produces
         them from the previous node's result.
+
+        `multi=True` marks a node whose request list is actually N
+        independent requests batched together (`create`'s or `edit`'s
+        multi-asset payload) so `_resolve_operation_result` keeps the whole
+        list as the result instead of unwrapping to one value and stopping
+        on the first error. Identifier-addressed operations (read/delete/
+        copy/...) never set this — a list of identifiers fans out into one
+        independent chain per identifier instead (see Approach A below).
         """
         return self._append(
             Node.operation(
@@ -151,63 +167,48 @@ class OperationChain:
             )
         )
 
-    def _log_operation(
-        self,
-        name: str,
-        url: str,
-        payload: Any,
-        parser: Any,
-        identifier: Any,
-    ) -> None:
-        if self._logger:
-            with self._logger.operation_scope(name):
-                self._logger.log_operation(name, url, payload, parser, identifier)
+    # ------------------------------------------------------------------ #
+    # Approach A — per-item independent chains for list-of-identifiers    #
+    #                                                                      #
+    # SCOPE (locked, do not re-litigate): every identifier-addressed      #
+    # operation — read, delete, copy, move, publish, checkIn, checkOut,   #
+    # listSubscribers, readAccessRights — fans a list of identifiers out  #
+    # into one independent `OperationChain` per identifier (see           #
+    # `Operations._new_chains_for` / `ChainGroup` below), uniformly,      #
+    # rather than batching N requests into a single node. This is why     #
+    # `_identifier_operation` below only ever handles ONE identifier:     #
+    # the fan-out already happened one level up, in `Operations`, before  #
+    # a single-identifier chain method is ever called.                    #
+    # ------------------------------------------------------------------ #
 
     def _identifier_operation(
         self,
         *,
         op_name: str,
-        log_name: str,
         method: HTTPMethod,
-        identifiers: Any,
+        identifier: Any,
         parser: Any,
         payload: Any = None,
-        log_payload: Any = None,
         checkout_ledger: bool = False,
     ) -> Self:
         """Append a node for an endpoint addressed as `<op>/{type}/{id-or-path}`.
 
-        Handles both the single-identifier and list-of-identifiers forms; a
-        list produces one request per identifier inside a single node, and
-        that node's result is a list.
-        """
-        multi = isinstance(identifiers, list)
-        items = identifiers if multi else [identifiers]
+        Always a single identifier, single request, single node — a list of
+        identifiers is handled by `Operations` fanning out into one chain
+        per identifier before this ever runs (see Approach A above).
 
-        requests: list[RequestExecutor] = []
-        for item in items:
-            segments = resolve_identifier(item)
-            if checkout_ledger:
-                set_checkedout("/".join(segments))
-            url = self._driver._build_url(op_name, *segments)
-            requests.append(
-                RequestExecutor(url, method, parser, payload=payload, identifier=item)
-            )
-            self._log_operation(
-                log_name,
-                url,
-                log_payload if log_payload is not None else payload,
-                parser,
-                item,
-            )
+        No separate `log_name` parameter anymore — the pipeline-line label
+        (pass 3) is derived from `op_name.upper()` at execution time, which
+        was always identical to the old build-time `log_name` value.
+        """
+        segments = resolve_identifier(identifier)
+        if checkout_ledger:
+            set_checkedout("/".join(segments))
+        url = self._driver._build_url(op_name, *segments)
+        request = RequestExecutor(url, method, parser, payload=payload, identifier=identifier)
 
         return self._add_operation(
-            op_name,
-            requests,
-            identifier=identifiers,
-            payload=payload,
-            parser=parser,
-            multi=multi,
+            op_name, [request], identifier=identifier, payload=payload, parser=parser
         )
 
     def then(
@@ -238,15 +239,14 @@ class OperationChain:
 
     def read(
         self,
-        identifiers: IdentifierType | Path | list[IdentifierType | Path],
+        identifier: IdentifierType | Path,
         parser=parse_assets,
     ) -> Self:
-        """Append a GET `read/{type}/{id-or-path}` step for one or more assets."""
+        """Append a GET `read/{type}/{id-or-path}` step for an asset."""
         return self._identifier_operation(
             op_name="read",
-            log_name="READ",
             method="GET",
-            identifiers=identifiers,
+            identifier=identifier,
             parser=parser,
         )
 
@@ -259,9 +259,8 @@ class OperationChain:
         """Append a POST `delete/{type}/{id-or-path}` step for an asset."""
         return self._identifier_operation(
             op_name="delete",
-            log_name="DELETE",
             method="POST",
-            identifiers=identifier,
+            identifier=identifier,
             payload=payload,
             parser=parser,
         )
@@ -284,7 +283,6 @@ class OperationChain:
                     parser=bound_parser,  # This now only expects (raw)
                 )
             )
-            self._log_operation("CREATE", url, single_asset, bound_parser, None)
 
         return self._add_operation(
             "create", requests, payload=payload, parser=parser, multi=multi
@@ -292,22 +290,22 @@ class OperationChain:
 
     def edit(
         self,
-        identifier: IdentifierType | Path | None,
         payload: Asset | list[Asset] | Callable[[Any], Asset | list[Asset]],
         parser=parse_success,
     ) -> Self:
         """Append a POST `edit` step saving one or more modified assets.
 
-        The `edit` endpoint is addressed by the payload rather than the URL;
-        `identifier` is what the chain reports this step against in logs and
-        errors.
+        The `edit` endpoint is addressed by the payload rather than an
+        explicit identifier: each asset's own id/path/site fields are used
+        to build its per-request identifier (see `identifier_from_asset`),
+        and the chain's own logging identifier is captured from it too when
+        this is the chain's only node (see `_build_edit_requests`).
 
         `payload` may be a callable, in which case it is invoked with the
         previous node's result when the chain runs — that is how
         `read → then(transform) → edit` writes back the transformed asset.
 
         Args:
-            identifier: Asset this edit targets, used for error reporting.
             payload: The asset(s) to save, or a callable producing them from
                 the previous node's result.
             parser: Response parser, defaults to `parse_success`.
@@ -317,7 +315,6 @@ class OperationChain:
             return self._add_operation(
                 "edit",
                 None,
-                identifier=identifier,
                 payload=payload,
                 parser=parser,
                 multi=False,
@@ -329,11 +326,26 @@ class OperationChain:
         return self._add_operation(
             "edit",
             requests,
-            identifier=identifier,
             payload=payload,
             parser=parser,
             multi=multi,
         )
+
+    def _edit_identifier(self, asset: Asset) -> IdentifierType:
+        """Resolve the identifier an `edit` request/chain reports itself under.
+
+        Raises clearly here (rather than letting `identifier_from_asset`'s
+        bare `UUID(None)` failure surface) because a missing id on this
+        specific call path means a synthetic create()-style `Asset` was
+        routed through `edit()` by mistake, not a generally-tolerable gap.
+        """
+        if asset.get("id") is None:
+            raise ValueError(
+                f"Cannot edit asset at path={asset.get('path')!r} — it has no "
+                "'id'. This usually means an Asset built for create() was "
+                "routed through edit() by mistake."
+            )
+        return identifier_from_asset(asset)
 
     def _build_edit_requests(
         self,
@@ -346,62 +358,67 @@ class OperationChain:
         payload = resolver(previous) if callable(resolver) else resolver
         assets = payload if isinstance(payload, list) else [payload]
 
+        if self._asset_identifier is None and assets:
+            # Lazy capture: a standalone `edit(asset)` chain (no prior read)
+            # has no earlier operation node for `_append` to pull an
+            # identifier from, since edit() itself no longer takes one — so
+            # derive the chain's logging identifier from the asset being
+            # saved once we actually have it in hand, using the first asset
+            # as representative for a batch payload.
+            self._asset_identifier = self._edit_identifier(assets[0])
+
         requests: list[RequestExecutor] = []
         for single_asset in assets:
             url = self._driver._build_url("edit")
-            identifier = single_asset.get("path")
+            identifier = self._edit_identifier(single_asset)
             requests.append(
                 RequestExecutor(
                     url, "POST", parser, payload=single_asset, identifier=identifier
                 )
             )
-            self._log_operation("EDIT", url, single_asset, parser, identifier)
         return requests
 
     def copy(
         self,
-        identifier: IdentifierType | Path | list[IdentifierType | Path],
+        identifier: IdentifierType | Path,
         payload: copyParameters,
         parser=parse_success,
     ) -> Self:
-        """Append a POST `copy/{type}/{id-or-path}` step for one or more assets."""
+        """Append a POST `copy/{type}/{id-or-path}` step for an asset."""
         return self._identifier_operation(
             op_name="copy",
-            log_name="COPY",
             method="POST",
-            identifiers=identifier,
+            identifier=identifier,
             payload=payload,
             parser=parser,
         )
 
     def move(
         self,
-        identifier: IdentifierType | Path | list[IdentifierType | Path],
+        identifier: IdentifierType | Path,
         payload: moveParameters,
         parser=parse_success,
     ) -> Self:
-        """Append a POST `move/{type}/{id-or-path}` step to move/rename assets."""
+        """Append a POST `move/{type}/{id-or-path}` step to move/rename an asset."""
         return self._identifier_operation(
             op_name="move",
-            log_name="MOVE",
             method="POST",
-            identifiers=identifier,
+            identifier=identifier,
             payload=payload,
             parser=parser,
         )
 
     def publish(
         self,
-        identifier: IdentifierType | Path | list[IdentifierType | Path],
+        identifier: IdentifierType | Path,
         payload: None | publishInformation = None,
         parser=parse_success,
     ) -> Self:
-        """Append a POST `publish/{type}/{id-or-path}` step for one or more assets."""
+        """Append a POST `publish/{type}/{id-or-path}` step for an asset."""
         return self._identifier_operation(
             op_name="publish",
-            log_name="PUBLISH",
             method="POST",
-            identifiers=identifier,
+            identifier=identifier,
             payload=payload,
             parser=parser,
         )
@@ -415,22 +432,20 @@ class OperationChain:
         assert isinstance(payload, SearchInformation)
         url = self._driver._build_url("search")
         request = RequestExecutor[ListElements](url, "POST", parser, payload=payload)
-        self._log_operation("SEARCH", url, payload, parser, None)
         return self._add_operation("search", [request], payload=payload, parser=parser)
 
     # -------Asset Controls-------
     def checkIn(
         self,
-        identifier: IdentifierType | Path | list[IdentifierType | Path],
+        identifier: IdentifierType | Path,
         payload: Comment,
         parser=parse_success,
     ) -> Self:
         """Append a POST `checkIn/...` step, toggling the local checkout ledger."""
         return self._identifier_operation(
             op_name="checkIn",
-            log_name="CHECKIN",
             method="POST",
-            identifiers=identifier,
+            identifier=identifier,
             payload=payload,
             parser=parser,
             checkout_ledger=True,
@@ -438,15 +453,14 @@ class OperationChain:
 
     def checkOut(
         self,
-        identifier: IdentifierType | Path | list[IdentifierType | Path],
+        identifier: IdentifierType | Path,
         parser=parse_checked_out_asset,
     ) -> Self:
         """Append a POST `checkOut/...` step, toggling the local checkout ledger."""
         return self._identifier_operation(
             op_name="checkOut",
-            log_name="CHECKOUT",
             method="POST",
-            identifiers=identifier,
+            identifier=identifier,
             parser=parser,
             checkout_ledger=True,
         )
@@ -455,7 +469,6 @@ class OperationChain:
         """Append a GET `listSites` step listing all sites."""
         url = self._driver._build_url("listSites")
         request = RequestExecutor[ListElements](url, "GET", parser)
-        self._log_operation("LISTSITES", url, None, parser, None)
         return self._add_operation("listSites", [request], parser=parser)
 
     def readAudits(
@@ -466,7 +479,6 @@ class OperationChain:
         """Append a GET `readAudits` step for audit entries matching the criteria."""
         url = self._driver._build_url("readAudits")
         request = RequestExecutor[ListElements](url, "GET", parser, payload=payload)
-        self._log_operation("READAUDITS", url, payload, parser, payload.by_identifier)
         return self._add_operation(
             "readAudits",
             [request],
@@ -483,9 +495,8 @@ class OperationChain:
         """Append a GET `listSubscribers/{type}/{id-or-path}` step for an asset."""
         return self._identifier_operation(
             op_name="listSubscribers",
-            log_name="LISTSUBSCRIBERS",
             method="GET",
-            identifiers=identifier,
+            identifier=identifier,
             parser=parser,
         )
 
@@ -497,7 +508,6 @@ class OperationChain:
         """Append a POST `siteCopy` step copying an entire site."""
         url = self._driver._build_url("siteCopy")
         request = RequestExecutor(url, "POST", parser, payload=payload)
-        self._log_operation("SITECOPY", url, payload, parser, None)
         return self._add_operation("siteCopy", [request], payload=payload, parser=parser)
 
     def readAccessRights(
@@ -508,9 +518,8 @@ class OperationChain:
         """Append a GET `readAccessRights/{type}/{id-or-path}` step for an asset."""
         return self._identifier_operation(
             op_name="readAccessRights",
-            log_name="READACCESSRIGHTS",
             method="GET",
-            identifiers=identifier,
+            identifier=identifier,
             parser=parser,
         )
 
@@ -521,7 +530,6 @@ class OperationChain:
         """Append a POST `editAccessRights` step updating an asset's ACL."""
         url = self._driver._build_url("editAccessRights")
         request = RequestExecutor(url, "POST", parse_success, payload=payload)
-        self._log_operation("EDITACCESSRIGHTS", url, payload, None, None)
         return self._add_operation(
             "editAccessRights", [request], payload=payload, parser=parse_success
         )
@@ -534,9 +542,8 @@ class OperationChain:
         """Append a GET `readWorkflowSettings/{type}/{id-or-path}` step."""
         return self._identifier_operation(
             op_name="readWorkflowSettings",
-            log_name="READWORKFLOWSETTINGS",
             method="GET",
-            identifiers=identifier,
+            identifier=identifier,
             parser=parser,
         )
 
@@ -555,7 +562,6 @@ class OperationChain:
         request = RequestExecutor(
             url, "POST", parser, payload=payload, identifier=id_fields
         )
-        self._log_operation("EDITWORKFLOWSETTINGS", url, payload, parser, id_fields)
         return self._add_operation(
             "editWorkflowSettings",
             [request],
@@ -568,7 +574,6 @@ class OperationChain:
         """Append a GET `listMessages` step listing inbox messages."""
         url = self._driver._build_url("listMessages")
         request = RequestExecutor[ListElements](url, "GET", parser)
-        self._log_operation("LISTMESSAGES", url, None, parser, None)
         return self._add_operation("listMessages", [request], parser=parser)
 
     def markMessage(self, message: Message) -> Self:
@@ -577,7 +582,6 @@ class OperationChain:
             "markMessage", message.__class__.__name__, message.m_id
         )
         request = RequestExecutor(url, "POST", parse_success, payload=message)
-        self._log_operation("MARKMESSAGE", url, message, None, None)
         return self._add_operation(
             "markMessage", [request], payload=message, parser=parse_success
         )
@@ -588,21 +592,18 @@ class OperationChain:
             "deleteMessage", message.__class__.__name__, message.m_id
         )
         request = RequestExecutor(url, "POST", parse_success)
-        self._log_operation("DELETEMESSAGE", url, None, None, None)
         return self._add_operation("deleteMessage", [request], parser=parse_success)
 
     def readPreferences(self, parser=parse_payloads) -> Self:
         """Append a GET `readPreferences` step for the current user."""
         url = self._driver._build_url("readPreferences")
         request = RequestExecutor[SimplePayload](url, "GET", parser)
-        self._log_operation("READPREFERENCES", url, None, parser, None)
         return self._add_operation("readPreferences", [request], parser=parser)
 
     def editPreference(self, payload: preference) -> Self:
         """Append a POST `editPreference` step updating a user preference."""
         url = self._driver._build_url("editPreference")
         request = RequestExecutor(url, "POST", parse_success, payload=payload)
-        self._log_operation("EDITPREFERENCE", url, payload, None, None)
         return self._add_operation(
             "editPreference", [request], payload=payload, parser=parse_success
         )
@@ -615,9 +616,8 @@ class OperationChain:
         """Append a GET `readWorkflowInformation/{type}/{id-or-path}` step."""
         return self._identifier_operation(
             op_name="readWorkflowInformation",
-            log_name="READWORKFLOWINFORMATION",
             method="GET",
-            identifiers=identifier,
+            identifier=identifier,
             parser=parser,
         )
 
@@ -630,9 +630,8 @@ class OperationChain:
         """Append a POST `performWorkflowTransition/...` step advancing a workflow."""
         return self._identifier_operation(
             op_name="performWorkflowTransition",
-            log_name="PERFORMWORKFLOWTRANSITION",
             method="POST",
-            identifiers=identifier,
+            identifier=identifier,
             payload=payload,
             parser=parser,
         )
@@ -703,34 +702,55 @@ class OperationChain:
             value = await loop.run_in_executor(executor, fn, previous)
         return previous if value is None else value
 
-    def _log_start(self) -> None:
-        if self._logger:
-            self._logger.log_chain_start(self._index, self._asset_identifier)
+    def _start_line_if_needed(self) -> None:
+        """Resolve the chain-line's `(uuid_or_path, asset_type)` prefix, once.
 
-    def _log_node(self, step: int, node: Node) -> None:
-        if self._logger:
-            self._logger.log_node_execution(
-                step,
-                node.node_type,
-                node.operation_type,
-                node.name if node.node_type == "callback" else None,
-                chain_index=self._index,
-            )
+        Deferred rather than called unconditionally up front because a
+        standalone `edit(asset)` chain doesn't know `_asset_identifier`
+        until its (only) node's requests are built (see
+        `_build_edit_requests`'s lazy capture) — calling this again after
+        that population is a no-op for every other chain shape, where
+        `_asset_identifier` is already known from the first `read`/etc. node.
+        """
+        if not self._line.identifier:
+            self._line.start(self._asset_identifier)
 
-    def _log_stop(self, step: int, node: Node, error: Any) -> None:
-        if self._logger:
-            self._logger.log_chain_error(
-                self._index,
-                self._asset_identifier,
-                step,
-                node.node_type,
-                node.operation_type or node.name,
-                error,
-            )
+    def _log_requests(self, requests: list[RequestExecutor]) -> None:
+        """Log `[METHOD] URL` for every request in an operation node, before
+        it runs — one call per server-touching request (not just the first),
+        matching a `create`/`edit` batch node's multiple requests as well as
+        the common single-request case.
 
-    def _log_finish(self, result: Any) -> None:
-        if self._logger:
-            self._logger.log_chain_complete(self._index, self._asset_identifier, result)
+        In verbose mode, also writes the request payload to its own file and
+        references it by name; `log_request_detail` itself never inlines a
+        payload, in any mode.
+        """
+        if self._logger is None:
+            return
+        for request in requests:
+            payload_ref = None
+            if self._logger.is_debug and request.payload is not None:
+                key = request.log_key
+                payload_ref = f"{key}_request.json"
+                self._logger.write_request_file(key, serialize_payload(request.payload))
+            self._logger.log_request_detail(request.method, request.url, payload_ref)
+
+    @staticmethod
+    def _error_location(error: Any) -> tuple[str, str, int]:
+        """`(message, filename, line)` for `render_error`'s `!ERROR:` line.
+
+        An `Exception` gives its own traceback's last frame; a `CascadeError`
+        (or any other value the driver returned) has no traceback, so only
+        its message is available.
+        """
+        if isinstance(error, Exception):
+            tb = traceback.extract_tb(error.__traceback__)
+            frame_info = tb[-1] if tb else None
+            file = os.path.basename(frame_info.filename) if frame_info else "?"
+            line = (frame_info.lineno or 0) if frame_info else 0
+            return f"{type(error).__name__}: {error}", file, line
+        message = getattr(error, "message", None) or str(error)
+        return message, "?", 0
 
     def execute(
         self,
@@ -755,35 +775,58 @@ class OperationChain:
             The last node's result, or the error that stopped the chain.
         """
         driver = driver if driver is not None else self._driver
-        self._log_start()
 
         result: Any = None
         node = self._head
         step = 0
+        last_node_was_operation = False
 
         while node is not None:
             step += 1
-            self._log_node(step, node)
+            node.input = result
 
             if node.node_type == "operation":
+                # Bare op name appended before dispatch (open-ended/"in
+                # progress" per the design) — if this node fails below, this
+                # is already the failing step's own label render_error needs.
+                self._line.append_step((node.operation_type or "operation").upper())
                 try:
                     requests = self._node_requests(node, result)
+                except Exception as exc:  # noqa: BLE001 - chain reports, never raises
+                    self._start_line_if_needed()
+                    return self._stopped(step, exc)
+                self._start_line_if_needed()
+                self._log_requests(requests)
+                try:
                     raw = driver._submitRequests(requests)
                 except Exception as exc:  # noqa: BLE001 - chain reports, never raises
-                    return self._stopped(step, node, exc)
+                    return self._stopped(step, exc)
                 value, stop = self._resolve_operation_result(node, raw)
                 if stop:
-                    return self._stopped(step, node, value)
+                    return self._stopped(step, value)
+                last_node_was_operation = True
             else:
                 try:
                     value = self._run_callback_sync(node, result, driver, executor)
                 except Exception as exc:  # noqa: BLE001 - chain reports, never raises
-                    return self._stopped(step, node, exc)
+                    self._line.append_step(node.name)
+                    return self._stopped(step, exc)
+                self._line.append_step(f"{node.name}: {type(value).__name__}")
+                last_node_was_operation = False
 
+            node.output = value
             result = value
             node = node.next
 
-        self._log_finish(result)
+        # Only an operation-terminated chain needs its return type spelled
+        # out as its own trailing segment (the `EDIT -> CascadeSuccess`
+        # asymmetry) — a callback-terminated chain already named its own
+        # result type in its `fn_name: Type` segment above, so appending it
+        # again here would render a duplicate trailing type.
+        if last_node_was_operation:
+            self._line.append_step(type(result).__name__)
+        if self._logger:
+            self._logger.flush_chain(self._line)
         return result
 
     async def execute_async(self, executor: Executor | None = None) -> Any:
@@ -800,53 +843,118 @@ class OperationChain:
         Returns:
             The last node's result, or the error that stopped the chain.
         """
-        self._log_start()
-
         result: Any = None
         node = self._head
         step = 0
+        last_node_was_operation = False
 
         while node is not None:
             step += 1
-            self._log_node(step, node)
+            node.input = result
 
             if node.node_type == "operation":
+                self._line.append_step((node.operation_type or "operation").upper())
                 try:
                     requests = self._node_requests(node, result)
+                except Exception as exc:  # noqa: BLE001 - chain reports, never raises
+                    self._start_line_if_needed()
+                    return self._stopped(step, exc)
+                self._start_line_if_needed()
+                self._log_requests(requests)
+                try:
                     raw = await self._driver.execute_requests(requests)
                 except Exception as exc:  # noqa: BLE001 - chain reports, never raises
-                    return self._stopped(step, node, exc, progress=True)
+                    return self._stopped(step, exc)
                 value, stop = self._resolve_operation_result(node, raw)
                 if stop:
-                    return self._stopped(step, node, value, progress=True)
+                    return self._stopped(step, value)
+                last_node_was_operation = True
             else:
                 try:
                     value = await self._run_callback_async(node, result, executor)
                 except Exception as exc:  # noqa: BLE001 - chain reports, never raises
-                    return self._stopped(step, node, exc, progress=True)
+                    self._line.append_step(node.name)
+                    return self._stopped(step, exc)
+                self._line.append_step(f"{node.name}: {type(value).__name__}")
+                last_node_was_operation = False
 
+            node.output = value
             result = value
             node = node.next
 
-        self._log_finish(result)
+        if last_node_was_operation:
+            self._line.append_step(type(result).__name__)
         if self._logger:
-            self._logger.log_progress(failed=False)
+            self._logger.flush_chain(self._line)
         return result
 
-    def _stopped(
-        self,
-        step: int,
-        node: Node,
-        error: Any,
-        progress: bool = False,
-    ) -> Any:
-        """Log the stopping node and hand the error back as the chain result."""
-        if isinstance(error, Exception) and not isinstance(error, CascadeError) and self._logger:
-            self._logger.log_python_error(error)
-        self._log_stop(step, node, error)
-        if progress and self._logger:
-            self._logger.log_progress(failed=True)
+    def _stopped(self, step: int, error: Any) -> Any:
+        """Flush the chain's line plus its `v`/`!ERROR:` block, once, and
+        hand back `error` as the chain's result.
+
+        `step` is 1-based and, by construction, always equals the number of
+        segments already appended to `self._line` (every code path above
+        appends exactly one label — resolved or not — before either
+        continuing to the next node or calling this) — so `step - 1` is the
+        failing segment's own index.
+        """
+        if self._logger:
+            message, file, line = self._error_location(error)
+            self._logger.flush_chain_error(self._line, step - 1, message, file, line)
         return error
+
+
+@dataclass
+class ChainGroup:
+    """One chain per identifier, produced by fanning a list-of-identifiers
+    call out into independent chains (Approach A — see the scope-locking
+    comment above `OperationChain._identifier_operation`).
+
+    Forwards `.then()` and every `OperationChain` operation method to each
+    wrapped chain in turn and returns `self`, so a list call reads exactly
+    like the single-identifier form:
+        operations.read([id1, id2]).then(cb).edit(payload_fn)
+    fans out into 2 independent chains at `read`, then applies `then`/`edit`
+    to both.
+
+    `.then()` is spelled out explicitly since it is the primary documented
+    chaining method and benefits from being visible/typed here; every other
+    `OperationChain` method (edit, delete, copy, move, publish, checkIn,
+    checkOut, ...) is forwarded via `__getattr__` instead of one explicit
+    passthrough per method, so this class never needs to change again when
+    `OperationChain` grows a new operation.
+    """
+
+    chains: list[OperationChain]
+
+    def __iter__(self):
+        return iter(self.chains)
+
+    def __len__(self) -> int:
+        return len(self.chains)
+
+    def then(
+        self,
+        callback_fn: Callable[[Any], Any] | list[Callable[[Any], Any]],
+    ) -> "ChainGroup":
+        """Append `callback_fn` (or each function in the list) to every chain."""
+        for chain in self.chains:
+            chain.then(callback_fn)
+        return self
+
+    def __getattr__(self, name: str) -> Callable[..., "ChainGroup"]:
+        """Forward any other `OperationChain` method to every wrapped chain.
+
+        Raises `AttributeError` naturally (via `getattr` below) if `name`
+        isn't a real `OperationChain` method, same as attribute access would.
+        """
+
+        def call_on_every_chain(*args: Any, **kwargs: Any) -> "ChainGroup":
+            for chain in self.chains:
+                getattr(chain, name)(*args, **kwargs)
+            return self
+
+        return call_on_every_chain
 
 
 @dataclass
@@ -866,7 +974,14 @@ class Operations:
     Example:
         cascade.operations.read(identifier).then(filter_files).then(process_images)
         cascade.operations.read(identifier).then([filter_files, process_images])
-        cascade.operations.read(identifier).then(rewrite).edit(identifier, build_payload)
+        cascade.operations.read(identifier).then(rewrite).edit(build_payload)
+
+    A list of identifiers fans out into one independent chain per identifier
+    (Approach A) rather than one chain covering all of them, so a partial
+    failure is reported per-asset instead of collapsing the whole batch:
+        cascade.operations.read([id1, id2, id3]).then(cb).edit(payload_fn)
+    returns a `ChainGroup` of 3 chains, each running read -> cb -> edit on
+    exactly one asset; `submit_requests()` then returns 3 results.
     """
 
     _driver: CascadeCMSRestDriver
@@ -883,6 +998,20 @@ class Operations:
         self._chains.append(chain)
         return chain
 
+    def _new_chains_for(
+        self,
+        identifiers: list[Any],
+        apply: Callable[[OperationChain, Any], OperationChain],
+    ) -> ChainGroup:
+        """Fan a list of identifiers out into one independent chain each.
+
+        `apply(chain, identifier)` starts that chain with whatever operation
+        the caller is building (`chain.read(identifier, parser)`, etc.) —
+        kept as a callback so this one method serves every identifier-taking
+        operation instead of duplicating the fan-out per method.
+        """
+        return ChainGroup([apply(self._new_chain(), identifier) for identifier in identifiers])
+
     def _reset_chains(self) -> None:
         """Drop every registered chain; called once a batch has been executed."""
         self._chains.clear()
@@ -891,17 +1020,29 @@ class Operations:
         self,
         identifiers: IdentifierType | Path | list[IdentifierType | Path],
         parser=parse_assets,
-    ) -> OperationChain:
-        """Start a chain with GET `read/{type}/{id-or-path}` for one or more assets."""
+    ) -> OperationChain | ChainGroup:
+        """Start a chain with GET `read/{type}/{id-or-path}` for one or more assets.
+
+        A list of identifiers returns a `ChainGroup` of independent chains,
+        one per identifier (Approach A) — see the class docstring.
+        """
+        if isinstance(identifiers, list):
+            return self._new_chains_for(
+                identifiers, lambda chain, ident: chain.read(ident, parser)
+            )
         return self._new_chain().read(identifiers, parser)
 
     def delete(
         self,
-        identifier: IdentifierType | Path,
+        identifier: IdentifierType | Path | list[IdentifierType | Path],
         payload: deleteParameters | None = None,
         parser=parse_success,
-    ) -> OperationChain:
-        """Start a chain with POST `delete/{type}/{id-or-path}` for an asset."""
+    ) -> OperationChain | ChainGroup:
+        """Start a chain with POST `delete/{type}/{id-or-path}` for one or more assets."""
+        if isinstance(identifier, list):
+            return self._new_chains_for(
+                identifier, lambda chain, ident: chain.delete(ident, payload, parser)
+            )
         return self._new_chain().delete(identifier, payload, parser)
 
     def create(self, payload: list[NewAsset] | NewAsset, parser=None) -> OperationChain:
@@ -910,20 +1051,23 @@ class Operations:
 
     def edit(
         self,
-        identifier: IdentifierType | Path | None,
         payload: Asset | list[Asset] | Callable[[Any], Asset | list[Asset]],
         parser=parse_success,
     ) -> OperationChain:
         """Start a chain with POST `edit` saving one or more modified assets."""
-        return self._new_chain().edit(identifier, payload, parser)
+        return self._new_chain().edit(payload, parser)
 
     def copy(
         self,
         identifier: IdentifierType | Path | list[IdentifierType | Path],
         payload: copyParameters,
         parser=parse_success,
-    ) -> OperationChain:
+    ) -> OperationChain | ChainGroup:
         """Start a chain with POST `copy/{type}/{id-or-path}` for one or more assets."""
+        if isinstance(identifier, list):
+            return self._new_chains_for(
+                identifier, lambda chain, ident: chain.copy(ident, payload, parser)
+            )
         return self._new_chain().copy(identifier, payload, parser)
 
     def move(
@@ -931,8 +1075,12 @@ class Operations:
         identifier: IdentifierType | Path | list[IdentifierType | Path],
         payload: moveParameters,
         parser=parse_success,
-    ) -> OperationChain:
+    ) -> OperationChain | ChainGroup:
         """Start a chain with POST `move/{type}/{id-or-path}` to move/rename assets."""
+        if isinstance(identifier, list):
+            return self._new_chains_for(
+                identifier, lambda chain, ident: chain.move(ident, payload, parser)
+            )
         return self._new_chain().move(identifier, payload, parser)
 
     def publish(
@@ -940,8 +1088,12 @@ class Operations:
         identifier: IdentifierType | Path | list[IdentifierType | Path],
         payload: None | publishInformation = None,
         parser=parse_success,
-    ) -> OperationChain:
+    ) -> OperationChain | ChainGroup:
         """Start a chain with POST `publish/{type}/{id-or-path}` for one or more assets."""
+        if isinstance(identifier, list):
+            return self._new_chains_for(
+                identifier, lambda chain, ident: chain.publish(ident, payload, parser)
+            )
         return self._new_chain().publish(identifier, payload, parser)
 
     def search(
@@ -958,16 +1110,24 @@ class Operations:
         identifier: IdentifierType | Path | list[IdentifierType | Path],
         payload: Comment,
         parser=parse_success,
-    ) -> OperationChain:
+    ) -> OperationChain | ChainGroup:
         """Start a chain with POST `checkIn/{type}/{id-or-path}` for one or more assets."""
+        if isinstance(identifier, list):
+            return self._new_chains_for(
+                identifier, lambda chain, ident: chain.checkIn(ident, payload, parser)
+            )
         return self._new_chain().checkIn(identifier, payload, parser)
 
     def checkOut(
         self,
         identifier: IdentifierType | Path | list[IdentifierType | Path],
         parser=parse_checked_out_asset,
-    ) -> OperationChain:
+    ) -> OperationChain | ChainGroup:
         """Start a chain with POST `checkOut/{type}/{id-or-path}` for one or more assets."""
+        if isinstance(identifier, list):
+            return self._new_chains_for(
+                identifier, lambda chain, ident: chain.checkOut(ident, parser)
+            )
         return self._new_chain().checkOut(identifier, parser)
 
     def listSites(self, parser=parse_list_elements) -> OperationChain:
@@ -984,10 +1144,14 @@ class Operations:
 
     def listSubscribers(
         self,
-        identifier: IdentifierType | Path,
+        identifier: IdentifierType | Path | list[IdentifierType | Path],
         parser=parse_list_elements,
-    ) -> OperationChain:
-        """Start a chain with GET `listSubscribers/{type}/{id-or-path}` for an asset."""
+    ) -> OperationChain | ChainGroup:
+        """Start a chain with GET `listSubscribers/{type}/{id-or-path}` for one or more assets."""
+        if isinstance(identifier, list):
+            return self._new_chains_for(
+                identifier, lambda chain, ident: chain.listSubscribers(ident, parser)
+            )
         return self._new_chain().listSubscribers(identifier, parser)
 
     def siteCopy(
@@ -1000,10 +1164,14 @@ class Operations:
 
     def readAccessRights(
         self,
-        identifier: IdentifierType | Path,
+        identifier: IdentifierType | Path | list[IdentifierType | Path],
         parser=parse_access_rights,
-    ) -> OperationChain:
-        """Start a chain with GET `readAccessRights/{type}/{id-or-path}` for an asset."""
+    ) -> OperationChain | ChainGroup:
+        """Start a chain with GET `readAccessRights/{type}/{id-or-path}` for one or more assets."""
+        if isinstance(identifier, list):
+            return self._new_chains_for(
+                identifier, lambda chain, ident: chain.readAccessRights(ident, parser)
+            )
         return self._new_chain().readAccessRights(identifier, parser)
 
     def editAccessRights(

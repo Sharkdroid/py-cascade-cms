@@ -19,10 +19,11 @@ from cascade_cms.cmstypes import (
     CascadeSuccess,
     IdentifierType,
     Path,
+    identifier_from_asset,
 )
 from cascade_cms.driver import CascadeCMSRestDriver
 from cascade_cms.operation_logger import OperationLogger
-from cascade_cms.operations import Node, OperationChain, Operations
+from cascade_cms.operations import ChainGroup, Node, OperationChain, Operations
 
 ID_ONE = "8b320f55ac1001062545a6d2562cee4b"
 ID_TWO = "9c431066bd21120736f6b7e3673dff5c"
@@ -86,9 +87,9 @@ class TestSingleChainExecution:
     def test_chain_contains_read_and_edit_nodes(self, operations):
         """Chaining read → edit creates 2 operation nodes."""
         identifier = IdentifierType(id=ID_ONE, type="page")
-        payload = {"page": {"name": "Updated"}}
+        payload = make_asset(id=ID_ONE, name="Updated", path="/page-1")
 
-        chain = operations.read(identifier).edit(identifier, payload)
+        chain = operations.read(identifier).edit(payload)
 
         # Walk the chain
         nodes = walk(chain)
@@ -101,12 +102,12 @@ class TestSingleChainExecution:
     def test_chain_without_callbacks_returns_final_result(self, operations, mock_driver):
         """Simple read → edit returns edit result."""
         identifier = IdentifierType(id=ID_ONE, type="page")
-        payload = {"page": {"name": "Updated"}}
+        payload = make_asset(id=ID_ONE, name="Updated", path="/page-1")
 
         expected_result = make_asset(id=ID_ONE, name="Updated")
         mock_driver._submitRequests.return_value = [expected_result]
 
-        chain = operations.read(identifier).edit(identifier, payload)
+        chain = operations.read(identifier).edit(payload)
         result = chain.execute(mock_driver)
 
         # Should get the result from the operation
@@ -123,7 +124,7 @@ class TestChainWithMultipleCallbacks:
     def test_chain_with_two_callbacks(self, operations):
         """Multiple .then() calls create callback nodes."""
         identifier = IdentifierType(id=ID_ONE, type="page")
-        payload = {"page": {"name": "Updated"}}
+        payload = make_asset(id=ID_ONE, name="Updated", path="/page-1")
 
         def validate(result):
             return result
@@ -134,7 +135,7 @@ class TestChainWithMultipleCallbacks:
         chain = (operations.read(identifier)
                  .then(validate)
                  .then(transform)
-                 .edit(identifier, payload))
+                 .edit(payload))
 
         # Count nodes
         nodes = walk(chain)
@@ -150,7 +151,7 @@ class TestChainWithMultipleCallbacks:
     def test_callbacks_execute_in_order(self, operations, mock_driver):
         """Callbacks process result sequentially."""
         identifier = IdentifierType(id=ID_ONE, type="page")
-        payload = {"page": {"name": "Updated"}}
+        payload = make_asset(id=ID_ONE, name="Updated", path="/page-1")
 
         call_order = []
 
@@ -171,7 +172,7 @@ class TestChainWithMultipleCallbacks:
         chain = (operations.read(identifier)
                  .then(cb1)
                  .then(cb2)
-                 .edit(identifier, payload))
+                 .edit(payload))
 
         result = chain.execute(mock_driver)
 
@@ -181,7 +182,7 @@ class TestChainWithMultipleCallbacks:
     def test_callback_result_passed_to_next_node(self, operations, mock_driver):
         """Each callback's output becomes input to next."""
         identifier = IdentifierType(id=ID_ONE, type="page")
-        payload = {"page": {"name": "Updated"}}
+        payload = make_asset(id=ID_ONE, name="Updated", path="/page-1")
 
         received_values = []
 
@@ -201,7 +202,7 @@ class TestChainWithMultipleCallbacks:
         chain = (operations.read(identifier)
                  .then(cb1)
                  .then(cb2)
-                 .edit(identifier, payload))
+                 .edit(payload))
 
         chain.execute(mock_driver)
 
@@ -244,19 +245,60 @@ class TestMultipleIndependentChains:
         """Each cascade.operations.read() starts a new chain."""
         id1 = IdentifierType(id=ID_ONE, type="page")
         id2 = IdentifierType(id=ID_TWO, type="page")
-        payload1 = {"page": {"name": "A"}}
-        payload2 = {"page": {"name": "B"}}
+        payload1 = make_asset(id=ID_ONE, name="A", path="/page-1")
+        payload2 = make_asset(id=ID_TWO, name="B", path="/page-2")
 
         def passthrough(result):
             return result
 
         # Two separate calls to operations.read() = two chains
-        chain1 = operations.read(id1).then(passthrough).edit(id1, payload1)
-        chain2 = operations.read(id2).edit(id2, payload2)
+        chain1 = operations.read(id1).then(passthrough).edit(payload1)
+        chain2 = operations.read(id2).edit(payload2)
 
         assert len(operations._chains) == 2
         assert operations._chains[0] is chain1
         assert operations._chains[1] is chain2
+
+    def test_read_with_list_of_identifiers_fans_out_into_independent_chains(
+        self, operations
+    ):
+        """operations.read([id1, id2]) registers 2 independent chains (Approach A),
+        not 1 chain covering both identifiers."""
+        id1 = IdentifierType(id=ID_ONE, type="page")
+        id2 = IdentifierType(id=ID_TWO, type="page")
+
+        group = operations.read([id1, id2])
+
+        assert isinstance(group, ChainGroup)
+        assert len(operations._chains) == 2
+        assert list(group.chains) == list(operations._chains)
+        assert all(isinstance(chain, OperationChain) for chain in group.chains)
+        assert group.chains[0]._asset_identifier == id1
+        assert group.chains[1]._asset_identifier == id2
+        # Each chain got its own single-request read node, not a shared batch.
+        assert group.chains[0]._head.operation_data["requests"][0].identifier is id1
+        assert group.chains[1]._head.operation_data["requests"][0].identifier is id2
+
+    def test_chain_group_then_and_edit_apply_to_every_member_chain(self, operations):
+        """`.then()`/`.edit()` on a ChainGroup forward to every wrapped chain."""
+        id1 = IdentifierType(id=ID_ONE, type="page")
+        id2 = IdentifierType(id=ID_TWO, type="page")
+
+        seen = []
+
+        def record(result):
+            seen.append(result)
+            return result
+
+        group = operations.read([id1, id2]).then(record)
+        returned = group.edit(lambda previous: previous)
+
+        assert returned is group
+        for chain in group.chains:
+            nodes = walk(chain)
+            assert [n.operation_type if n.node_type == "operation" else "callback" for n in nodes] == [
+                "read", "callback", "edit",
+            ]
 
     def test_chains_execute_independently(self, mock_driver, mock_logger):
         """Two chains execute without interference."""
@@ -264,7 +306,7 @@ class TestMultipleIndependentChains:
 
         id1 = IdentifierType(id=ID_ONE, type="page")
         id2 = IdentifierType(id=ID_TWO, type="page")
-        payload = {"page": {"name": "Updated"}}
+        payload = make_asset(id=ID_ONE, name="Updated", path="/page-1")
 
         read1 = make_asset(id=ID_ONE)
         read2 = make_asset(id=ID_TWO)
@@ -276,7 +318,7 @@ class TestMultipleIndependentChains:
             [read1], [result1], [read2], [result2],
         ]
 
-        ops.read(id1).edit(id1, payload)
+        ops.read(id1).edit(payload)
         ops.read(id2).delete(id2)
 
         # Execute both chains
@@ -300,7 +342,7 @@ class TestChainErrorIsolation:
         """Callback exception stops that chain, doesn't block others."""
         id1 = IdentifierType(id=ID_ONE, type="page")
         id2 = IdentifierType(id=ID_TWO, type="page")
-        payload = {"page": {"name": "Updated"}}
+        payload = make_asset(id=ID_ONE, name="Updated", path="/page-1")
 
         def failing_callback(result):
             raise ValueError("Invalid data")
@@ -312,8 +354,8 @@ class TestChainErrorIsolation:
         # Chain 1 stops after its read, so only three requests ever run.
         mock_driver._submitRequests.side_effect = [[asset1], [asset2], [edit_result]]
 
-        operations.read(id1).then(failing_callback).edit(id1, payload)
-        operations.read(id2).edit(id2, payload)
+        operations.read(id1).then(failing_callback).edit(payload)
+        operations.read(id2).edit(payload)
 
         results = []
         for chain in operations._chains:
@@ -335,7 +377,7 @@ class TestChainErrorIsolation:
     def test_callback_exception_in_results(self, operations, mock_driver):
         """Exception from callback is added to results (Option B)."""
         id1 = IdentifierType(id=ID_ONE, type="page")
-        payload = {"page": {"name": "Updated"}}
+        payload = make_asset(id=ID_ONE, name="Updated", path="/page-1")
 
         def failing_callback(result):
             raise RuntimeError("Processing failed")
@@ -343,7 +385,7 @@ class TestChainErrorIsolation:
         asset = make_asset(id=ID_ONE)
         mock_driver._submitRequests.return_value = [asset]
 
-        chain = operations.read(id1).then(failing_callback).edit(id1, payload)
+        chain = operations.read(id1).then(failing_callback).edit(payload)
 
         # Execution should catch the exception
         result = chain.execute(mock_driver)
@@ -363,7 +405,7 @@ class TestOperationFailure:
     def test_operation_cascade_error_stops_chain(self, operations, mock_driver):
         """CascadeError from read stops entire chain."""
         identifier = IdentifierType(id=ID_ONE, type="page")
-        payload = {"page": {"name": "Updated"}}
+        payload = make_asset(id=ID_ONE, name="Updated", path="/page-1")
 
         callbacks_run = []
 
@@ -374,7 +416,7 @@ class TestOperationFailure:
         cascade_error = CascadeError(message="Asset not found")
         mock_driver._submitRequests.return_value = [cascade_error]
 
-        chain = operations.read(identifier).then(should_not_run).edit(identifier, payload)
+        chain = operations.read(identifier).then(should_not_run).edit(payload)
         result = chain.execute(mock_driver)
 
         # Should get the CascadeError
@@ -384,7 +426,8 @@ class TestOperationFailure:
         assert mock_driver._submitRequests.call_count == 1
 
     def test_operation_error_logged_with_context(self, operations, mock_driver, mock_logger):
-        """Operation errors logged with step number and op type."""
+        """Operation errors flush through flush_chain_error with the failing
+        step's own (0-based) index and the chain's own line builder."""
         identifier = IdentifierType(id=ID_ONE, type="page")
 
         cascade_error = CascadeError(message="Not found")
@@ -393,13 +436,11 @@ class TestOperationFailure:
         chain = operations.read(identifier)
         result = chain.execute(mock_driver)
 
-        # Logger records which chain, which step, and which node failed
-        mock_logger.log_chain_error.assert_called_once()
-        args = mock_logger.log_chain_error.call_args.args
-        assert args[1] == identifier      # asset identifier
-        assert args[2] == 1               # step number
-        assert args[3] == "operation"     # node type
-        assert args[4] == "read"          # operation type
+        mock_logger.flush_chain_error.assert_called_once()
+        args = mock_logger.flush_chain_error.call_args.args
+        assert args[0] is chain._line
+        assert args[1] == 0  # failing step's index — the chain's only node
+        assert "Not found" in args[2]  # message
         assert isinstance(result, CascadeError)
 
 
@@ -474,14 +515,14 @@ class TestMixedOperationsAndCallbacks:
     def test_complex_chain_structure(self, operations):
         """Complex chain: read → cb → edit → cb → publish."""
         id1 = IdentifierType(id=ID_ONE, type="page")
-        payload = {"page": {"name": "Updated"}}
+        payload = make_asset(id=ID_ONE, name="Updated", path="/page-1")
 
         def passthrough(x):
             return x
 
         chain = (operations.read(id1)
                  .then(passthrough)
-                 .edit(id1, payload)
+                 .edit(payload)
                  .then(passthrough)
                  .publish(id1))
 
@@ -497,7 +538,7 @@ class TestMixedOperationsAndCallbacks:
         assert expected_types_actual == expected_types
 
     def test_callable_payload_receives_previous_result(self, operations, mock_driver):
-        """edit(identifier, callable) builds its payload from the previous node."""
+        """edit(callable) builds its payload from the previous node."""
         id1 = IdentifierType(id=ID_ONE, type="page")
 
         asset = make_asset(id=ID_ONE, name="Original", path="/about")
@@ -505,20 +546,19 @@ class TestMixedOperationsAndCallbacks:
         mock_driver._submitRequests.side_effect = [[asset], [edit_result]]
 
         seen = []
+        rewritten = make_asset(id=ID_ONE, name="Rewritten", path="/about")
 
         def build_payload(previous):
             seen.append(previous)
-            return {"page": {"name": "Rewritten"}, "path": "/about"}
+            return rewritten
 
-        chain = operations.read(id1).edit(id1, build_payload)
+        chain = operations.read(id1).edit(build_payload)
         result = chain.execute(mock_driver)
 
         assert seen == [asset]
         assert result == edit_result
         edit_requests = mock_driver._submitRequests.call_args_list[1].args[0]
-        assert edit_requests[0].payload == {
-            "page": {"name": "Rewritten"}, "path": "/about"
-        }
+        assert edit_requests[0].payload is rewritten
 
 
 # ============================================================================
@@ -591,7 +631,8 @@ class TestLoggerVerbosity:
     """Test logger output changes with debug flag."""
 
     def test_logger_called_during_chain_execution(self, operations, mock_driver, mock_logger):
-        """Logger methods are called during chain execution."""
+        """One log_request_detail() per server-touching request, and the
+        finished chain's line is flushed exactly once via flush_chain()."""
         identifier = IdentifierType(id=ID_ONE, type="page")
 
         def validate(result):
@@ -603,42 +644,40 @@ class TestLoggerVerbosity:
         chain = operations.read(identifier).then(validate)
         chain.execute(mock_driver)
 
-        # The chain reports its own progress: start, each node, completion
-        mock_logger.log_chain_start.assert_called_once_with(1, identifier)
-        assert mock_logger.log_node_execution.call_count == 2
-        assert mock_logger.log_node_execution.call_args_list[0].args[:3] == (
-            1, "operation", "read",
+        mock_logger.log_request_detail.assert_called_once()
+        method, url = mock_logger.log_request_detail.call_args.args[:2]
+        assert method == "GET"
+        assert url.endswith(f"read/page/{ID_ONE}")
+
+        mock_logger.flush_chain.assert_called_once()
+        flushed_builder = mock_logger.flush_chain.call_args.args[0]
+        assert flushed_builder is chain._line
+        # READ (bare op name) -> validate: Asset (callback + type). No extra
+        # trailing type segment — the chain ends on a callback, whose own
+        # "fn_name: Type" segment already names the result type.
+        assert flushed_builder.render_complete() == (
+            f"({ID_ONE}, page) READ -> validate: Asset"
         )
-        assert mock_logger.log_node_execution.call_args_list[1].args[:2] == (
-            2, "callback",
+        mock_logger.flush_chain_error.assert_not_called()
+
+    def test_debug_mode_writes_request_file_normal_mode_does_not(
+        self, tmp_path, mock_driver
+    ):
+        """Verbose mode writes the request payload to {key}_request.json
+        during chain execution; normal mode writes no files at all — the
+        new expression of what used to be "node logging is debug-only"."""
+        asset = make_asset(id=ID_ONE, name="Updated", path="/page-1")
+        mock_driver._submitRequests.return_value = [CascadeSuccess()]
+
+        normal_logger = OperationLogger(server="test", debug_config=None)
+        OperationChain(mock_driver, _logger=normal_logger).edit(asset).execute(mock_driver)
+        assert not list(tmp_path.glob("*.json"))
+
+        debug_logger = OperationLogger(
+            server="test", debug_config={"log_dir": str(tmp_path)}
         )
-        mock_logger.log_chain_complete.assert_called_once()
-        mock_logger.log_chain_error.assert_not_called()
-
-    def test_debug_config_controls_node_logging(self, tmp_path):
-        """Node logging is debug-only; normal mode stays quiet about steps."""
-        normal = OperationLogger(server="test", debug_config=None)
-        debug = OperationLogger(
-            server="test",
-            debug_config={"log_dir": str(tmp_path), "log_operations": True},
-        )
-
-        normal.log_node_execution(1, "operation", "read", None)
-        debug.log_node_execution(1, "operation", "read", None)
-
-        normal_lines = _logged_lines(normal)
-        debug_lines = _logged_lines(debug)
-
-        assert normal_lines == []
-        assert any("Step 1: operation (read)" in line for line in debug_lines)
-
-
-def _logged_lines(logger: OperationLogger) -> list[str]:
-    """Read back whatever a logger wrote to its logfile."""
-    handler = logger._file_logger.handlers[0]
-    handler.flush()
-    with open(handler.baseFilename) as fh:
-        return fh.read().splitlines()
+        OperationChain(mock_driver, _logger=debug_logger).edit(asset).execute(mock_driver)
+        assert list(tmp_path.glob("*_request.json"))
 
 
 # ============================================================================
@@ -678,9 +717,9 @@ class TestAssetIdentifierTracking:
     def test_identifier_tracked_from_first_operation(self, operations):
         """Chain tracks identifier from first operation node."""
         identifier = IdentifierType(id=ID_ONE, type="page")
-        payload = {"page": {"name": "Updated"}}
+        payload = make_asset(id=ID_ONE, name="Updated", path="/page-1")
 
-        chain = operations.read(identifier).edit(identifier, payload)
+        chain = operations.read(identifier).edit(payload)
 
         # Identifier should be set
         assert chain._asset_identifier is not None
@@ -694,11 +733,23 @@ class TestAssetIdentifierTracking:
             siteName="mysite",
             asset_type="page",
         )
-        payload = {"page": {"name": "Updated"}}
+        payload = make_asset(id=ID_ONE, name="Updated", path="/page-1")
 
-        chain = operations.read(path).edit(path, payload)
+        chain = operations.read(path).edit(payload)
 
         assert chain._asset_identifier == path
+
+    def test_standalone_edit_derives_identifier_from_asset(self, operations):
+        """A bare `edit(asset)` with no prior read derives its own chain
+        identifier from the asset's id/type/path fields (identifier_from_asset),
+        since edit() no longer takes an explicit identifier argument."""
+        asset = make_asset(
+            id=ID_ONE, name="Updated", path="/page-1", siteName="mysite"
+        )
+
+        chain = operations.edit(asset)
+
+        assert chain._asset_identifier == identifier_from_asset(asset)
 
 
 # ============================================================================
@@ -725,7 +776,7 @@ class TestDeleteOperationInResults:
         """Two chains with different ops both in results."""
         id1 = IdentifierType(id=ID_ONE, type="page")
         id2 = IdentifierType(id=ID_TWO, type="page")
-        payload = {"page": {"name": "Updated"}}
+        payload = make_asset(id=ID_ONE, name="Updated", path="/page-1")
 
         read_result = make_asset(id=ID_ONE)
         asset_result = make_asset(id=ID_ONE, name="Updated")
@@ -736,7 +787,7 @@ class TestDeleteOperationInResults:
             [read_result], [asset_result], [success_result],
         ]
 
-        operations.read(id1).edit(id1, payload)
+        operations.read(id1).edit(payload)
         operations.delete(id2)
 
         results = []
@@ -813,6 +864,64 @@ class TestThenWithListAndSingle:
 
 
 # ============================================================================
+# T15: Node input/output population (Option C)
+# ============================================================================
+
+class TestNodeInputOutput:
+    """Test that Node.input/Node.output are populated during execution."""
+
+    def test_sync_execute_populates_input_and_output_per_node(
+        self, operations, mock_driver
+    ):
+        """Each node's input is the previous node's output, and its output is
+        its own resolved value — for both operation and callback nodes."""
+        identifier = IdentifierType(id=ID_ONE, type="page")
+
+        def add_marker(result):
+            return {"marked": True, "asset": result}
+
+        asset = make_asset(id=ID_ONE)
+        mock_driver._submitRequests.return_value = [asset]
+
+        chain = operations.read(identifier).then(add_marker)
+        nodes = walk(chain)
+        result = chain.execute(mock_driver)
+
+        read_node, callback_node = nodes
+        assert read_node.input is None
+        assert read_node.output == asset
+        assert callback_node.input == asset
+        assert callback_node.output == result
+        assert result == {"marked": True, "asset": asset}
+
+    def test_async_execute_populates_input_and_output_per_node(
+        self, operations, mock_driver
+    ):
+        """execute_async() threads Node.input/output the same way execute() does."""
+        identifier = IdentifierType(id=ID_ONE, type="page")
+
+        def add_marker(result):
+            return {"marked": True, "asset": result}
+
+        asset = make_asset(id=ID_ONE)
+
+        async def fake_execute_requests(requests):
+            return [asset]
+
+        mock_driver.execute_requests = fake_execute_requests
+
+        chain = operations.read(identifier).then(add_marker)
+        nodes = walk(chain)
+        result = mock_driver.eventLoop.run_until_complete(chain.execute_async())
+
+        read_node, callback_node = nodes
+        assert read_node.input is None
+        assert read_node.output == asset
+        assert callback_node.input == asset
+        assert callback_node.output == result
+
+
+# ============================================================================
 # Integration: Full Wrapper Test
 # ============================================================================
 
@@ -840,7 +949,7 @@ class TestWrapperIntegration:
         """CascadeWrapperBase.submit_requests() executes chains properly."""
         id1 = IdentifierType(id=ID_ONE, type="page")
         id2 = IdentifierType(id=ID_TWO, type="page")
-        payload = {"page": {"name": "Updated"}}
+        payload = make_asset(id=ID_ONE, name="Updated", path="/page-1")
 
         asset1 = make_asset(id=ID_ONE)
         asset2 = make_asset(id=ID_TWO)
@@ -858,8 +967,8 @@ class TestWrapperIntegration:
         def boom(result):
             raise ValueError("bad asset")
 
-        wrapper.operations.read(id1).then(boom).edit(id1, payload)
-        wrapper.operations.read(id2).edit(id2, payload)
+        wrapper.operations.read(id1).then(boom).edit(payload)
+        wrapper.operations.read(id2).edit(payload)
 
         try:
             results = wrapper.submit_requests()
@@ -876,3 +985,134 @@ class TestWrapperIntegration:
         assert len(driver.batches) == 3
         # Chains are cleared, so a second batch starts clean
         assert wrapper.operations._chains == []
+
+
+# ============================================================================
+# End-to-end: real OperationLogger through StubDriver/CascadeWrapperBase
+# ============================================================================
+
+def _read_logfile(logger: OperationLogger) -> list[str]:
+    """Read back whatever a real logger wrote to its logfile."""
+    handler = logger._file_logger.handlers[0]
+    handler.flush()
+    with open(handler.baseFilename) as fh:
+        return fh.read().splitlines()
+
+
+class TestEndToEndLoggedOutput:
+    """Runs a real `OperationLogger` (not a mock) through the full wrapper/
+    driver/chain stack, proving pass-2's rendering and pass-3's wiring work
+    together — not just each piece in isolation."""
+
+    def test_success_chain_renders_edit_cascade_success_asymmetry(self, tmp_path):
+        """READ -> change_displayname: Asset -> EDIT -> CascadeSuccess:
+        the callback's segment carries its return type, the terminal EDIT
+        stays a bare name, and the chain's own overall result type is its
+        own trailing segment — the exact asymmetry the design calls out."""
+        identifier = IdentifierType(id=ID_ONE, type="page")
+        asset = make_asset(id=ID_ONE, name="Original", path="/page-1")
+        renamed = make_asset(id=ID_ONE, name="Renamed", path="/page-1")
+
+        driver = StubDriver([[asset], [CascadeSuccess()]])
+        logger = OperationLogger(server="TESTSRV", debug_config={"log_dir": str(tmp_path)})
+
+        wrapper = object.__new__(CascadeWrapperBase)
+        wrapper._driver = driver
+        wrapper._logger = logger
+        wrapper.operations = Operations(driver, _logger=logger)
+
+        def change_displayname(_asset):
+            return renamed
+
+        wrapper.operations.read(identifier).then(change_displayname).edit(renamed)
+
+        try:
+            results = wrapper.submit_requests()
+        finally:
+            driver.eventLoop.close()
+
+        assert results == [CascadeSuccess()]
+        lines = _read_logfile(logger)
+        assert (
+            f"({ID_ONE}, page) READ -> change_displayname: Asset -> EDIT -> CascadeSuccess"
+            in lines
+        )
+        assert "1/1 succeeded" in lines
+
+    def test_failing_chain_renders_v_and_error_block(self, tmp_path):
+        """A callback that raises produces a `v`/`!ERROR:` block aligned
+        under its own (unresolved) label, and the batch tally reflects it."""
+        identifier = IdentifierType(id=ID_TWO, type="page")
+        asset = make_asset(id=ID_TWO, name="Original", path="/page-2")
+
+        driver = StubDriver([[asset]])
+        logger = OperationLogger(server="TESTSRV", debug_config={"log_dir": str(tmp_path)})
+
+        wrapper = object.__new__(CascadeWrapperBase)
+        wrapper._driver = driver
+        wrapper._logger = logger
+        wrapper.operations = Operations(driver, _logger=logger)
+
+        def bad_transform(_asset):
+            raise TypeError("expected a dict, got an Asset")
+
+        wrapper.operations.read(identifier).then(bad_transform)
+
+        try:
+            results = wrapper.submit_requests()
+        finally:
+            driver.eventLoop.close()
+
+        assert isinstance(results[0], TypeError)
+        lines = _read_logfile(logger)
+
+        pipeline_line = f"({ID_TWO}, page) READ -> bad_transform"
+        assert pipeline_line in lines
+        pipeline_index = lines.index(pipeline_line)
+        v_line = lines[pipeline_index + 1]
+        error_line = lines[pipeline_index + 2]
+
+        assert v_line.strip() == "v"
+        # 'v' lands directly under "bad_transform"'s first character.
+        assert v_line.index("v") == len(pipeline_line) - len("bad_transform")
+        assert error_line.strip().startswith(
+            "!ERROR: TypeError: expected a dict, got an Asset"
+        )
+        assert "0/1 succeeded" in lines
+
+    def test_callback_terminated_chain_has_no_duplicate_trailing_type(self, tmp_path):
+        """READ -> some_transform: Asset, with no extra trailing `-> Asset`.
+
+        A chain's own return-type trailer (the `EDIT -> CascadeSuccess`
+        asymmetry above) must only fire when the chain's *last* node is an
+        operation. When the last node is a callback, that callback's own
+        `fn_name: Type` segment already names the result type — appending
+        it again would render `... -> Asset -> Asset`.
+        """
+        identifier = IdentifierType(id=ID_ONE, type="page")
+        asset = make_asset(id=ID_ONE, name="Original", path="/page-1")
+
+        driver = StubDriver([[asset]])
+        logger = OperationLogger(server="TESTSRV", debug_config={"log_dir": str(tmp_path)})
+
+        wrapper = object.__new__(CascadeWrapperBase)
+        wrapper._driver = driver
+        wrapper._logger = logger
+        wrapper.operations = Operations(driver, _logger=logger)
+
+        def some_transform(single_asset):
+            return single_asset
+
+        wrapper.operations.read(identifier).then(some_transform)
+
+        try:
+            results = wrapper.submit_requests()
+        finally:
+            driver.eventLoop.close()
+
+        assert results == [asset]
+        lines = _read_logfile(logger)
+        expected_line = f"({ID_ONE}, page) READ -> some_transform: Asset"
+        assert expected_line in lines
+        assert f"{expected_line} -> Asset" not in lines
+        assert "1/1 succeeded" in lines

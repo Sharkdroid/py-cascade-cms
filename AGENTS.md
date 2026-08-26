@@ -77,3 +77,19 @@ unattended. Treat skill rebuilding as a required manual step before tagging
 any release that touches the public API in `src/cascade_cms/` — run
 `build_skill.py`, fix whatever templates it flags, and only then commit and
 tag.
+
+## Maintaining the CHANGELOG
+
+Each section in `CHANGELOG.md` should include a note at the bottom listing
+which files were touched. For example:
+
+```markdown
+### Fixed
+- Fixed async callback execution order (affects callback chains)
+- Fixed nested payload aliasing issue
+
+**Files changed:** `src/cascade_cms/operations.py`, `src/cascade_cms/cmstypes.py`
+```
+
+This helps readers quickly understand the scope of changes and identify which
+parts of the library were affected.

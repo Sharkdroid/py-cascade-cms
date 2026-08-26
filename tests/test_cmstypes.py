@@ -10,6 +10,7 @@ from cascade_cms.cmstypes import (
     ListElements,
     Path,
     deleteParameters,
+    identifier_from_asset,
     moveParameters,
     resolve_identifier,
 )
@@ -161,6 +162,60 @@ def test_list_elements_parses_list_sites_response():
 def test_asset_type_normalizes_response_key(raw_key, expected):
     asset = Asset({"asset": {raw_key: {"id": "x"}}})
     assert asset.asset_type == expected
+
+
+def test_identifier_from_asset_builds_full_identifier():
+    asset = Asset(
+        {
+            "asset": {
+                "page": {
+                    "id": "8b320f55ac1001062545a6d2562cee4b",
+                    "path": "mysite/blog/post-1",
+                    "siteId": "9c431066bd21120736f6b7e3673dff5c",
+                    "siteName": "mysite",
+                }
+            }
+        }
+    )
+    identifier = identifier_from_asset(asset)
+
+    assert identifier.identifier == UUID("8b320f55ac1001062545a6d2562cee4b")
+    assert identifier.asset_type == "page"
+    assert identifier.get_path == "mysite/blog/post-1"
+    assert identifier.get_sitename == "mysite"
+    assert identifier.get_site_id == UUID("9c431066bd21120736f6b7e3673dff5c")
+
+
+def test_identifier_from_asset_without_site_fields():
+    """siteId/siteName are absent from the response — identifier_from_asset
+    should not choke on their absence, since PathBase.siteId is NotRequired
+    and siteName defaults to None."""
+    asset = Asset(
+        {
+            "asset": {
+                "folder": {
+                    "id": "8b320f55ac1001062545a6d2562cee4b",
+                    "path": "mysite/blog",
+                }
+            }
+        }
+    )
+    identifier = identifier_from_asset(asset)
+
+    assert identifier.identifier == UUID("8b320f55ac1001062545a6d2562cee4b")
+    assert identifier.asset_type == "folder"
+    assert identifier.get_path == "mysite/blog"
+    assert identifier.get_sitename is None
+    assert identifier.get_site_id is None
+
+
+def test_identifier_from_asset_missing_id_raises():
+    """A missing id fails loudly (via UUID(None)) rather than silently
+    returning a bogus identifier."""
+    asset = Asset({"asset": {"page": {"path": "mysite/blog/post-1"}}})
+
+    with pytest.raises(TypeError):
+        identifier_from_asset(asset)
 
 
 def test_asset_root_container_id_known_and_unknown_types():

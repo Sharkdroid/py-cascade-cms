@@ -375,8 +375,11 @@ class IdentifierType(BaseModel):
 
     @property
     def get_site_id(self):
+        # siteId is NotRequired (unlike siteName, it has no Field default),
+        # so pydantic may not populate the key at all — plain indexing would
+        # KeyError on that legitimate case.
         if self.path is not None:
-            return self.path["siteId"]
+            return self.path.get("siteId")
 
     @property
     def get_id(self):
@@ -418,6 +421,35 @@ def resolve_identifier(identifier: "IdentifierType | Path") -> tuple[str, ...]:
     if identifier.get("siteName") is None:
         raise ValueError("Path identifiers require siteName to build the request URL")
     return (str(identifier["asset_type"]), str(identifier["siteName"]), str(identifier["path"]))
+
+
+def identifier_from_asset(asset: "Asset") -> IdentifierType:
+    """Build an `IdentifierType` from an `Asset`'s own id/path/site fields.
+
+    A Cascade asset payload carries its own identity as flat `_data` keys
+    (`id`, `path`, `siteId`, `siteName`) rather than the nested `path` shape
+    `IdentifierType.path` (`PathBase`) expects, so this reshapes one into the
+    other. Used by `edit()` to derive a request's identifier from the asset
+    being saved, rather than from a separately-supplied identifier argument.
+
+    Does not itself guard against a missing `id` — `UUID(None)` raises on
+    that naturally — since whether a missing id is tolerable is a decision
+    for the caller (e.g. `OperationChain._edit_identifier` raises a specific,
+    actionable error for its call path instead of leaving this bare failure).
+    """
+    path_value: PathBase = {
+        "path": asset.get("path"),
+        "siteName": asset.get("siteName"),
+    }
+    site_id = asset.get("siteId")
+    if site_id:
+        path_value["siteId"] = uuid.UUID(site_id)
+
+    return IdentifierType(
+        identifier=uuid.UUID(asset.get("id")),
+        asset_type=cast(AssetTypes, asset.asset_type),
+        path=path_value,
+    )
 
 
 # ----- Helper Models (support response parsing) -----
@@ -738,9 +770,9 @@ class ListElements(BaseModel):
 class CascadeError(BaseModel):
     """Represents a Cascade API-level failure response (`{"success": false, "message": ...}`)."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra='forbid')
     success: bool = False
-    message: str
+    message: str = ""
 
 
 class CascadeSuccess(BaseModel):
@@ -828,8 +860,6 @@ class workflowTransitionInformation(SimplePayload):
     workflow_identifier: Annotated[uuid.UUID, Field(alias="workflowId")]
     action_identifier: Annotated[str, Field(alias="actionIdentifier")]
     transition_comment: str | None = Field(alias="transitionComment")
-
-    # TODO LATER: could add a model_validator after to make sure the uuid is coming from a Action
 
 
 class auditParameters(SimplePayload):

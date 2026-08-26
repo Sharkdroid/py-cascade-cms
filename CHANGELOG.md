@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.1.0]
+
+### Changed
+- **`edit()` no longer takes an `identifier` argument** — `operations.edit(payload, parser)` / `chain.edit(payload, parser)`, not `edit(identifier, payload, parser)`. Each asset's own `id`/`path`/`site` fields are used to derive its request identifier (`cmstypes.identifier_from_asset()`), including for logging/error reporting.
+- **A list of identifiers passed to `read`, `delete`, `copy`, `move`, `publish`, `checkIn`, `checkOut`, `listSubscribers`, or `readAccessRights` now fans out into one independent chain per identifier** (a `ChainGroup`), instead of batching all identifiers into a single node/chain. A failure on one asset no longer aborts the others; `.then()`/further operation calls on the returned `ChainGroup` apply to every chain in the group. `submit_requests()` now returns one result per identifier for these calls, not one result for the whole batch.
+- **`OperationLogger` rewritten around one pipeline-style line per chain** (e.g. `(id, type) READ -> transform: Asset -> EDIT -> CascadeSuccess`), written once when a chain finishes or stops, instead of nested per-operation/per-callback blocks. A stopped chain gets a `v` marker and `!ERROR:` block aligned under the failing step. Verbose (debug) mode now writes per-request `{key}_request.json`/`{key}_response.json` files under the log directory instead of inlining payloads/responses in the logfile.
+- `CascadeWrapperBase.submit_requests()` now reports a `succeeded/total` tally per batch (`log_batch_start`/`log_batch_end`) instead of a running "Processed: n/total" counter.
+
+### Fixed
+- `IdentifierType.get_site_id` no longer raises `KeyError` when a `Path` has no `siteId` — it was read with plain indexing despite `siteId` being `NotRequired`.
+- `CascadeError` now sets `extra='forbid'` and defaults `message` to `""`, so a malformed or minimal error response can't silently pass validation with missing/extra fields.
+
+### Removed
+- `CascadeCMSRestDriver.pending_requests`, `request_buffer`, `process_executors()`, and the dead `isFlushed` attribute — chains own their requests directly via `execute_requests()`/`_submitRequests(requests)`; the no-arg legacy path is gone.
+- `OperationLogger.operation_scope()`, `callback_scope()`, `log_operation()`, `log_callbacks()`, `log_running()`, and the depth/indent stack — superseded by the per-chain pipeline line.
+
+### Added
+- `cmstypes.identifier_from_asset()` — builds an `IdentifierType` from an `Asset`'s own `id`/`path`/`siteId`/`siteName` fields.
+- `operations.ChainGroup` — forwards `.then()` and every `OperationChain` method to each chain produced by a fanned-out list-of-identifiers call.
+- `wrapper.EnvironmentVars` — a `TypedDict` documenting the required `SERVER`/`API_KEY`/`CASCADE_URL` keys for `CascadeWrapperBase`'s `environmentVariables` argument.
+
+### Breaking
+- `edit(identifier, payload, parser=...)` → `edit(payload, parser=...)`.
+- `operations.read/delete/copy/move/publish/checkIn/checkOut/listSubscribers/readAccessRights` return a `ChainGroup` (not a single `OperationChain`) when passed a list of identifiers, and `submit_requests()` returns one result per identifier instead of one result for the batch.
+
+**Files changed:** `src/cascade_cms/cmstypes.py`, `src/cascade_cms/driver.py`, `src/cascade_cms/operation_logger.py`, `src/cascade_cms/operations.py`, `src/cascade_cms/wrapper.py`, `pyproject.toml`, `tests/test_cmstypes.py`, `tests/test_operation_chains.py`, `tests/test_operation_logger.py`
+
 ## [3.0.1]
 
 ### Fixed
@@ -13,6 +40,8 @@ All notable changes to this project will be documented in this file.
 ### Added
 - `Asset.asset_type` now normalizes the raw response wrapper key (e.g. `"dataDefinition"`, `"scriptFormat"`) to the request-side type (`"datadefinition"`, `"format"`) instead of returning it verbatim.
 - `Asset.root_container_id(asset_type)` — looks up a site asset's root container id for a given asset type (currently covers `datadefinition`, `sharedfield`, `folder`; returns `None` for unmapped types), so callers no longer need to hand-carry the `root*ContainerId` field-name table themselves.
+
+**Files changed:** `src/cascade_cms/cmstypes.py`, `src/cascade_cms/wrapper.py`, `tests/test_cmstypes.py`
 
 ## [3.0.0]
 
@@ -45,10 +74,14 @@ All notable changes to this project will be documented in this file.
 - `submit_requests()` returns one entry per chain including failures, where it previously returned one entry per successful request in completion order.
 - Operations no longer append to `driver.pending_requests`; chains own their requests.
 
+**Files changed:** `src/cascade_cms/__init__.py`, `src/cascade_cms/driver.py`, `src/cascade_cms/operation_logger.py`, `src/cascade_cms/operations.py`, `src/cascade_cms/wrapper.py`, `tests/test_operation_chains.py`, `tests/test_operations.py`
+
 ## [2.0.3]
 
 ### Fixed
 - `parse_create_asset` no longer raises a `NameError` on `create()` error responses (e.g. invalid API key). It now checks for `createdAssetId` before rebuilding an `IdentifierType`, and falls through to `ResponseParser`'s error-first logic (`CascadeError`) when the field is absent, instead of surfacing as a swallowed empty result.
+
+**Files changed:** `src/cascade_cms/cmstypes.py`
 
 ## [2.0.2]
 
@@ -61,6 +94,8 @@ All notable changes to this project will be documented in this file.
 ### Added
 - `Asset.asset_type` public property getter to read the asset type without accessing the private `_asset_type` attribute.
 - `CascadeSuccess` response model and `parse_success` parser for handling success-only responses from write operations.
+
+**Files changed:** `src/cascade_cms/cmstypes.py`, `src/cascade_cms/operations.py`, `src/cascade_cms/wrapper.py`
 
 ## [2.0.0]
 
@@ -75,3 +110,5 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 - `cmstypes.py` reorganized into clearly separated payload models, response models, type adapters, and parsers.
+
+**Files changed:** `pyproject.toml`, `src/cascade_cms/cmstypes.py`, `src/cascade_cms/driver.py`, `src/cascade_cms/operations.py`, `src/cascade_cms/wrapper.py`

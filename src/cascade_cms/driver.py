@@ -1,7 +1,7 @@
 import asyncio
+import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from types import CoroutineType
 from typing import Any, Literal, TypeVar
 
 from aiohttp import ClientResponse, ClientSession
@@ -11,9 +11,6 @@ from aiohttp_client_cache import SQLiteBackend
 from aiohttp_client_cache.response import CachedResponse
 
 from .cmstypes import (
-    BaseModel,
-    CascadeError,
-    CascadeObjects,
     Payloads,
     ResponseParser,
     serialize_payload,
@@ -59,10 +56,10 @@ class CacheHandler:
 
 @dataclass
 class RequestExecutor[T]:
-    """Represents a single queued HTTP request and how to parse its response.
+    """Represents a single HTTP request and how to parse its response.
 
-    Instances accumulate in `CascadeCMSRestDriver.pending_requests` and are
-    all executed concurrently by `process_executors()`.
+    Built by an `OperationChain` and executed concurrently, alongside the
+    rest of its batch, via `CascadeCMSRestDriver.execute_requests()`.
     """
 
     url: str
@@ -72,6 +69,20 @@ class RequestExecutor[T]:
     )
     payload: Payloads | None = None
     identifier: Any = None
+
+    @property
+    def log_key(self) -> str:
+        """Stable key for naming this request's verbose-mode JSON files.
+
+        Prefers the identifier's UUID hex (`IdentifierType`); falls back to
+        a short hash of the URL when only a `Path` (no UUID) or no
+        identifier at all is available, so a `{key}_request.json`/
+        `{key}_response.json` pair still lines up for the same request.
+        """
+        identifier = self.identifier
+        if hasattr(identifier, "get_id") and identifier.get_id:
+            return str(identifier.get_id)
+        return hashlib.sha1(self.url.encode()).hexdigest()[:16]
 
     async def fetch(
         self,
@@ -100,13 +111,13 @@ class RequestExecutor[T]:
             if self.payload:
                 payload_bytes = serialize_payload(self.payload)
 
-            # Cache the
+            # Cache the Response
             cache_key = cache.get_cache_key(self.method, self.url)
             already_cached = await cache.get_response(cache_key)
             if already_cached is not None:
                 raw_data = await already_cached.read()
                 if logger:
-                    logger.log_response(raw_data)
+                    logger.write_response_file(self.log_key, raw_data)
                 parsed_response = self.parser(raw_data)
                 return parsed_response._content  # type: ignore[return-value]
 
@@ -118,7 +129,7 @@ class RequestExecutor[T]:
                 response.raise_for_status()
                 raw_data = await response.read()
                 if logger:
-                    logger.log_response(raw_data)
+                    logger.write_response_file(self.log_key, raw_data)
                     logger.log_network_headers(
                         dict(response.request_info.headers),
                         dict(response.headers),
@@ -181,10 +192,7 @@ class CascadeCMSRestDriver:
         self._apiKey = apiKey
         self._logger = logger
 
-        self.pending_requests: list[RequestExecutor] = []
-        self.request_buffer: list[CoroutineType[Any, Any, type[BaseModel]]] = []
         self.base_url = f"{cascade_url}/api/v1"
-        self.isFlushed = True  # NOTE: appears unused elsewhere in this codebase
 
         # Stores response object for debugging purpose. the ClientResponse object contains request infomation as well.
         self.request_response_info: CachedResponse | None = None
@@ -223,8 +231,7 @@ class CascadeCMSRestDriver:
     ) -> list[Any]:
         """Run the given requests concurrently and return their results in order.
 
-        This is the single execution core: operation chains await it directly,
-        and `process_executors()` routes `pending_requests` through it.
+        This is the single execution core: operation chains await it directly.
 
         Concurrency is bounded by `MAX_REQUESTS` via a driver-wide semaphore,
         so many chains running at once still cannot exceed that ceiling.
@@ -242,46 +249,37 @@ class CascadeCMSRestDriver:
         """
 
         async def _run(executor: RequestExecutor) -> Any:
+            # Deliberate boundary (see class docstring / Section 1.10 of the
+            # design doc): the driver stays chain-agnostic and only writes
+            # raw request/response artifacts (via RequestExecutor.fetch's
+            # own logger calls) — it has no visibility into which step, in
+            # which chain, a request belongs to, so rendering a chain's
+            # pipeline line or its `v`/`!ERROR:` alignment is OperationChain's
+            # job (execute/execute_async), done after this returns a value.
             try:
-                result = await executor.fetch(
+                return await executor.fetch(
                     self.session, self._semaphore, self.cache, self._logger
                 )
             except Exception as exc:  # noqa: BLE001 - surfaced as a value, see docstring
-                if self._logger:
-                    self._logger.log_python_error(exc)
                 return exc
-
-            if isinstance(result, CascadeError) and self._logger:
-                self._logger.log_cascade_error(result.message, executor.identifier)
-            return result
 
         return list(await asyncio.gather(*(_run(request) for request in requests)))
 
-    async def process_executors(self) -> list[CascadeObjects]:
-        """Run all pending requests concurrently and collect their results."""
-        return await self.execute_requests(self.pending_requests)
-
     def _submitRequests(
         self,
-        requests: list[RequestExecutor] | None = None,
+        requests: list[RequestExecutor],
     ) -> list[Any]:
         """Run the event loop to completion for a batch of requests.
 
         Blocks until every request finishes.
 
         Args:
-            requests: The requests to execute. When omitted, the driver's
-                `pending_requests` queue is used and cleared afterwards.
+            requests: The requests to execute.
 
         Returns:
             One entry per request, in submission order.
         """
-        if requests is not None:
-            return self.eventLoop.run_until_complete(self.execute_requests(requests))
-
-        res = self.eventLoop.run_until_complete(self.process_executors())
-        self.pending_requests.clear()
-        return res
+        return self.eventLoop.run_until_complete(self.execute_requests(requests))
 
     def close(self):
         """Tear down the aiohttp session, cache DB, and event loop."""
