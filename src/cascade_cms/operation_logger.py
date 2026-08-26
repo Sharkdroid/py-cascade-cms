@@ -328,6 +328,17 @@ class OperationLogger:
             line += f" | payload: {payload_ref}"
         self._write(line)
 
+    def log_cache_hit(self, method: str, url: str) -> None:
+        """Mark a request served from the local response cache instead of
+        the network, written right after that request's own `[METHOD] URL`
+        line — the surrounding chain line reports success either way, which
+        can make a stale cache look identical to a real (or a broken)
+        request; this line is the only place that distinction is visible.
+        """
+        if not self._is_debug:
+            return
+        self._write(f"[CACHED-{method}] {url}")
+
     def _write_json_file(self, filename: str, data: Any) -> None:
         log_dir = self._log_dir()
         log_dir.mkdir(parents=True, exist_ok=True)

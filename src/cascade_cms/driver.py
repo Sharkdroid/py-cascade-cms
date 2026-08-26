@@ -117,6 +117,7 @@ class RequestExecutor[T]:
             if already_cached is not None:
                 raw_data = await already_cached.read()
                 if logger:
+                    logger.log_cache_hit(self.method, self.url)
                     logger.write_response_file(self.log_key, raw_data)
                 parsed_response = self.parser(raw_data)
                 return parsed_response._content  # type: ignore[return-value]

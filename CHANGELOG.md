@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.1.1]
+
+### Fixed
+- `OperationLogger.log_cache_hit()` now logs when a request is served from the local response cache (debug mode only). Previously, cached responses were silently treated as real network requests in the chain walk, making it impossible to distinguish a stale cache from a broken request or a real response.
+
+### Added
+- `OperationLogger.log_cache_hit(method, url)` — writes `[CACHED-{method}] {url}` after the request's `[METHOD] URL` line in debug logs, marking responses served from cache instead of the network.
+
+**Files changed:** `src/cascade_cms/driver.py`, `src/cascade_cms/operation_logger.py`
+
 ## [3.1.0]
 
 ### Changed
