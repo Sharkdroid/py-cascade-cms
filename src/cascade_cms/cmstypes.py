@@ -431,17 +431,12 @@ def identifier_from_asset(asset: "Asset") -> IdentifierType:
     `IdentifierType.path` (`PathBase`) expects, so this reshapes one into the
     other. Used by `edit()` to derive a request's identifier from the asset
     being saved, rather than from a separately-supplied identifier argument.
-
-    Does not itself guard against a missing `id` — `UUID(None)` raises on
-    that naturally — since whether a missing id is tolerable is a decision
-    for the caller (e.g. `OperationChain._edit_identifier` raises a specific,
-    actionable error for its call path instead of leaving this bare failure).
     """
     path_value: PathBase = {
         "path": asset.get("path"),
-        "siteName": asset.get("siteName"),
+        "siteName": asset._data.get("siteName"),
     }
-    site_id = asset.get("siteId")
+    site_id = asset._data.get("siteId")
     if site_id:
         path_value["siteId"] = uuid.UUID(site_id)
 
@@ -621,14 +616,17 @@ class Asset:
         lowered = self._asset_type.lower()
         return self._ASSET_TYPE_KEY_ALIASES.get(lowered, lowered)
 
-    def get(self, key: str, default=None):
-        """Access _data fields conveniently."""
-        return self._data.get(key, default)
+    def get(self, key: str):
+        """Access _data fields, raising KeyError if missing."""
+        if key not in self._data:
+            raise KeyError(f"Field '{key}' not found")
+        return self._data[key]
 
     def get_data_structure(self: 'Asset', group: str, identifier: str) -> list[dict[str, Any]] | None:
         """
         Find nodes matching identifier within all instances of a group.
         Returns first match per group instance as a list of node objects by reference.
+        Raises KeyError if required fields (identifier, structuredDataNodes) are missing.
         """
 
         def find_group(obj):
@@ -643,23 +641,29 @@ class Asset:
 
         def find_in_nodes(nodes):
             for node in nodes:
-                if (
-                    node.get("identifier") == identifier
-                    and "structuredDataNodes" not in node
-                ):
-                    return node
-                if "structuredDataNodes" in node:
-                    result = find_in_nodes(node["structuredDataNodes"])
-                    if result:
-                        return result
+                try:
+                    if (
+                        node["identifier"] == identifier
+                        and "structuredDataNodes" not in node
+                    ):
+                        return node
+                    if "structuredDataNodes" in node:
+                        result = find_in_nodes(node["structuredDataNodes"])
+                        if result:
+                            return result
+                except KeyError as e:
+                    raise KeyError(f"Missing required field in node: {e}")
             return None
 
         matches = []
         for group_node in find_group(self._data):
-            nodes = group_node.get("structuredDataNodes", [])
-            match = find_in_nodes(nodes)
-            if match:
-                matches.append(match)
+            try:
+                nodes = group_node["structuredDataNodes"]
+                match = find_in_nodes(nodes)
+                if match:
+                    matches.append(match)
+            except KeyError as e:
+                raise KeyError(f"Missing required field 'structuredDataNodes' in group node: {e}")
 
         return matches if matches else None
 
@@ -669,6 +673,7 @@ class Asset:
         """
         Find a page configuration and optionally a specific region within it.
         Returns Pydantic model objects by reference.
+        Raises KeyError if required fields (name, pageRegions) are missing from models.
 
         Args:
             configuration_name: The 'name' of the configuration e.g. 'ASPX', 'XML'
@@ -679,9 +684,12 @@ class Asset:
             - PageRegion object if page_region is also provided
             - None if either is not found
         """
-        config = next(
-            (c for c in self._page_configs if c.name == configuration_name), None
-        )
+        try:
+            config = next(
+                (c for c in self._page_configs if c.name == configuration_name), None
+            )
+        except (KeyError, AttributeError) as e:
+            raise KeyError(f"Missing required field 'name' in PageConfiguration: {e}")
 
         if config is None:
             return None
@@ -689,7 +697,10 @@ class Asset:
         if page_region is None:
             return config
 
-        region = next((r for r in config.pageRegions if r.name == page_region), None)
+        try:
+            region = next((r for r in config.pageRegions if r.name == page_region), None)
+        except (KeyError, AttributeError) as e:
+            raise KeyError(f"Missing required field 'pageRegions' or 'name' in PageRegion: {e}")
 
         return region
 

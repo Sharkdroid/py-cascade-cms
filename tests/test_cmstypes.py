@@ -210,11 +210,11 @@ def test_identifier_from_asset_without_site_fields():
 
 
 def test_identifier_from_asset_missing_id_raises():
-    """A missing id fails loudly (via UUID(None)) rather than silently
+    """A missing id fails loudly with KeyError rather than silently
     returning a bogus identifier."""
     asset = Asset({"asset": {"page": {"path": "mysite/blog/post-1"}}})
 
-    with pytest.raises(TypeError):
+    with pytest.raises(KeyError):
         identifier_from_asset(asset)
 
 

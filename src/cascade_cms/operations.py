@@ -339,9 +339,12 @@ class OperationChain:
         specific call path means a synthetic create()-style `Asset` was
         routed through `edit()` by mistake, not a generally-tolerable gap.
         """
-        if asset.get("id") is None:
+        try:
+            asset.get("id")
+        except KeyError:
+            path = asset._data.get("path", "<unknown>")
             raise ValueError(
-                f"Cannot edit asset at path={asset.get('path')!r} — it has no "
+                f"Cannot edit asset at path={path!r} — it has no "
                 "'id'. This usually means an Asset built for create() was "
                 "routed through edit() by mistake."
             )
