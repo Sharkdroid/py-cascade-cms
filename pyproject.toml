@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "pytest-asyncio", "mypy", "ruff", "build", "twine>=7.0.0"]
+dev = ["pytest", "pytest-asyncio", "mypy", "ruff", "build", "twine>=7.0.0", "mcp>=2.1.0,<3", "uv"]
 
 [project.urls]
 Homepage = "https://github.com/Sharkdroid/py-cascade-cms"
@@ -43,4 +43,5 @@ exclude = [
     # execute) them as test modules.
     "tests/edit_test.py",
     "tests/testing.py",
+    "tests/mcp/smoke_test.py",
 ]

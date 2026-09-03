@@ -7,6 +7,7 @@ from typing import (
     Any,
     ClassVar,
     Literal,
+    NamedTuple,
     NotRequired,
     Self,
     TypedDict,
@@ -423,27 +424,43 @@ def resolve_identifier(identifier: "IdentifierType | Path") -> tuple[str, ...]:
     return (str(identifier["asset_type"]), str(identifier["siteName"]), str(identifier["path"]))
 
 
-def identifier_from_asset(asset: "Asset") -> IdentifierType:
-    """Build an `IdentifierType` from an `Asset`'s own id/path/site fields.
+class AssetLogIdentifier(NamedTuple):
+    """Unvalidated (id, raw_type) pair used only to label an `edit`
+    request/chain for logging.
 
-    A Cascade asset payload carries its own identity as flat `_data` keys
-    (`id`, `path`, `siteId`, `siteName`) rather than the nested `path` shape
-    `IdentifierType.path` (`PathBase`) expects, so this reshapes one into the
-    other. Used by `edit()` to derive a request's identifier from the asset
-    being saved, rather than from a separately-supplied identifier argument.
+    Not an `IdentifierType` substitute for URL-building: `edit()`'s request
+    has no type/id URL segment (see `Chain._build_edit_requests`), so this
+    only needs to satisfy the duck-typed `get_id`/`get_type`/`get_path`
+    surface that `RequestExecutor.log_key` and `ChainLineBuilder.start`
+    read for naming verbose-mode log files/lines.
     """
-    path_value: PathBase = {
-        "path": asset.get("path"),
-        "siteName": asset._data.get("siteName"),
-    }
-    site_id = asset._data.get("siteId")
-    if site_id:
-        path_value["siteId"] = uuid.UUID(site_id)
 
-    return IdentifierType(
-        identifier=uuid.UUID(asset.get("id")),
-        asset_type=cast(AssetTypes, asset.asset_type),
-        path=path_value,
+    id: uuid.UUID
+    raw_type: str
+
+    @property
+    def get_id(self) -> str:
+        return self.id.hex
+
+    @property
+    def get_type(self) -> str:
+        return self.raw_type
+
+    @property
+    def get_path(self) -> None:
+        return None
+
+
+def edit_log_identifier_from_asset(asset: "Asset") -> AssetLogIdentifier:
+    """Build the (id, raw_type) label `edit()` reports itself under in logs.
+
+    Uses `Asset.internal_type` (the raw response wrapper key) rather than a
+    validated `AssetTypes` value, since this is never used to build a
+    request URL — only to name/label verbose-mode logs.
+    """
+    return AssetLogIdentifier(
+        id=uuid.UUID(asset.get("id")),
+        raw_type=asset.internal_type,
     )
 
 
@@ -601,20 +618,18 @@ class Asset:
                 )
         self._data[key] = value
 
-    # Cascade wraps a response under a key that's usually the requested
-    # asset_type re-cased (e.g. "dataDefinition" for a "datadefinition"
-    # request), but not always: this handles the exceptions where the
-    # wrapper key isn't a mechanical re-casing of the request-side type.
-    _ASSET_TYPE_KEY_ALIASES: ClassVar[dict[str, str]] = {
-        "scriptformat": "format",
-    }
-
     @property
-    def asset_type(self) -> str:
-        """The request-side asset type (matching `AssetTypes`/`Path.asset_type`),
-        normalized from the raw response wrapper key in `_asset_type`."""
-        lowered = self._asset_type.lower()
-        return self._ASSET_TYPE_KEY_ALIASES.get(lowered, lowered)
+    def internal_type(self) -> str:
+        """The raw Cascade response wrapper key, lowercased.
+
+        Not a validated `AssetTypes` value — Cascade's wrapper key doesn't
+        always match the request-side type (e.g. `"scriptformat"` for a
+        `format`/`format_SCRIPT` asset). This is only ever round-tripped back
+        into a request body (see `AssetAdapter.dump_json`), which is why no
+        normalization happens here; callers that need a validated
+        `AssetTypes` must supply/derive one themselves.
+        """
+        return self._asset_type.lower()
 
     def get(self, key: str):
         """Access _data fields, raising KeyError if missing."""

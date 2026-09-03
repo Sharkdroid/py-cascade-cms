@@ -29,6 +29,7 @@ cache/
 
 # Environment / secrets
 .env
+tests/mcp/output.txt
 
 # Editors
 .vscode/

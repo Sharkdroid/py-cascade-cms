@@ -3,6 +3,8 @@
 `cascade-cms-rest` — a typed, async REST client for Hannon Hill Cascade CMS 8.
 Library source is `src/cascade_cms/`.
 
+#### claude --resume e086dd12-3669-4445-9620-1f2a5c5cdbf4
+
 ## Repo commands
 
 ```bash

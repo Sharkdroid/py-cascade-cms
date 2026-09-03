@@ -35,38 +35,50 @@ who need to explore a live server's shape.
 
 ## 3. Distribution & Packaging
 
-- Lives at `py-cascade-cms/mcp/` (sibling to `skill/`), **inside** the
-  existing repo and existing `cascade-cms-rest` package — not a new PyPI
-  project.
-- Add an optional dependency group to the existing `pyproject.toml`:
-  ```toml
-  [project.optional-dependencies]
-  mcp = ["mcp>=1.0.0"]  # confirm exact FastMCP/mcp SDK dependency at implementation time
+**CORRECTED 2026-09-01** — the original draft of this section modeled `mcp/`
+as an installable extra of the `cascade-cms-rest` PyPI package
+(`pip install cascade-cms-rest[mcp]`). **That is wrong and should not be
+implemented.** The actual model, confirmed with Keith:
 
-  [project.scripts]
-  cascade-cms-rest-mcp = "cascade_cms.mcp.server:main"
-  ```
-- Install path for users: `pip install cascade-cms-rest[mcp]`
-- Client config invocation (document this exactly, it's a common copy-paste
-  point of failure):
-  ```json
-  {
-    "mcpServers": {
-      "cascade-cms": {
-        "command": "uvx",
-        "args": ["--from", "cascade-cms-rest[mcp]", "cascade-cms-rest-mcp"],
-        "env": {
-          "CASCADE_API_URL": "...",
-          "CASCADE_API_KEY": "..."
-        }
-      }
-    }
-  }
-  ```
-- **Note**: since `mcp/` sits under `src/cascade_cms/`, confirm at
-  implementation time whether it should be `src/cascade_cms/mcp/` (importable
-  as `cascade_cms.mcp`) — this is the assumed layout below. Adjust the
-  entry-point path if a different location is chosen.
+- `mcp/` is a **sibling to `skill/`** — a distributed artifact in its own
+  right, not a subpackage of `cascade_cms` and not something pulled in by a
+  normal `pip install cascade-cms-rest`.
+- **Dependencies for `mcp/` (the `mcp`/FastMCP SDK, etc.) live in the
+  repo's `dev-dependencies`** — installed only for people working inside
+  the repo (building, testing, iterating with Claude Code). They must
+  **not** appear in `[project.dependencies]` or as a
+  `[project.optional-dependencies]` extra on the main `cascade-cms-rest`
+  package — a normal end-user install of the library stays completely
+  unaffected.
+- **End-user distribution mirrors the `skill/` pattern**: a versioned
+  artifact published via GitHub Releases (zip), not a PyPI package and not
+  a pip extra. A script writer who wants the MCP server downloads that
+  release artifact directly, the same way they'd currently get
+  `cascade-cms-script-writer`.
+- **Open item for implementation**: the `skill/` folder (and its
+  `build_skill.py` release-build mechanics) was not present in the source
+  snapshot this plan was written against, so the exact release-build
+  process `mcp/` should mirror needs to be confirmed directly against
+  `skill/build_skill.py` in the live repo — same script-driven zip-build
+  pattern, or does `mcp/` need its own lightweight build step since it's
+  Python source rather than templated skill content? Resolve this **before**
+  wiring up any release automation, and confirm with Keith if the two don't
+  cleanly mirror each other.
+- Regardless of build mechanics, `mcp/` still needs a console-script-style
+  entry point once installed by the end user from the release artifact
+  (`cascade-cms-rest-mcp`) and a client config snippet in its own docs —
+  the exact `uvx`/install invocation depends on how the release artifact is
+  packaged (e.g. `uvx --from <release-zip-or-path> cascade-cms-rest-mcp`,
+  or a `pip install` from the extracted zip) and should be finalized once
+  the release-build mechanics above are confirmed.
+- **Note**: since `mcp/` sits alongside `skill/` (not under
+  `src/cascade_cms/`), confirm the exact import path at implementation
+  time — this plan's directory layout in §5 assumes
+  `src/cascade_cms/mcp/` for import convenience during development, but
+  that's independent of *how it's distributed* per this section. If
+  `skill/`'s pattern implies `mcp/` should sit fully outside `src/` too
+  (mirroring `skill/` more literally), adjust §5 accordingly and confirm
+  with Keith.
 
 ## 4. Framework & Credentials
 
@@ -245,8 +257,10 @@ incrementally with Claude Code rather than review one large drop.
    paths (§6.3, §6.4).
 3. **Phase 3 — Remaining reads**: `cascade_root_container_id` +
    `cascade_list_sites`.
-4. **Phase 4 — Packaging**: `pyproject.toml` optional-dependency group,
-   console script entry point, credential wiring per §4, README/client-config
+4. **Phase 4 — Packaging**: `dev-dependencies` entry for the `mcp`/FastMCP
+   SDK, console script entry point, credential wiring per §4, GitHub
+   Release build mechanics mirroring `skill/build_skill.py` (confirm exact
+   approach against the live repo first), README/client-config
    documentation per §3.
 
 ## 9. Acceptance Criteria
@@ -259,9 +273,13 @@ incrementally with Claude Code rather than review one large drop.
       what's actually available, and/or which tool to call next) — never a
       bare "not found" or raw traceback.
 - [ ] No tool in this server can perform a write operation, even indirectly.
-- [ ] `pip install cascade-cms-rest[mcp]` installs everything needed; base
-      `cascade-cms-rest` install remains unaffected (no new hard
-      dependency).
+- [ ] A normal `pip install cascade-cms-rest` remains completely
+      unaffected — no new hard dependency, no new optional-dependency
+      extra. The `mcp`/FastMCP SDK dependency lives only in the repo's
+      dev-dependencies.
+- [ ] `mcp/` is distributed to end users as a versioned GitHub Release
+      artifact, mirroring the `skill/` distribution pattern — not via PyPI
+      and not via a pip extra.
 - [ ] Credentials are read from the same env var names `CascadeWrapperBase`
       already expects — zero new credential-naming surface.
 - [ ] README documents the known instance-observed-vs-schema limitation

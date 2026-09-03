@@ -9,6 +9,7 @@ from typing import Any, Literal, Self
 
 from .cmstypes import (
     Asset,
+    AssetLogIdentifier,
     CascadeError,
     Comment,
     IdentifierType,
@@ -23,7 +24,7 @@ from .cmstypes import (
     auditParameters,
     copyParameters,
     deleteParameters,
-    identifier_from_asset,
+    edit_log_identifier_from_asset,
     moveParameters,
     parse_access_rights,
     parse_assets,
@@ -106,7 +107,7 @@ class OperationChain:
     _head: Node | None = None
     _current: Node | None = None
     _logger: OperationLogger | None = None
-    _asset_identifier: IdentifierType | Path | None = None
+    _asset_identifier: IdentifierType | Path | AssetLogIdentifier | None = None
     _index: int = 0
     _line: ChainLineBuilder = field(default_factory=ChainLineBuilder)
 
@@ -297,7 +298,7 @@ class OperationChain:
 
         The `edit` endpoint is addressed by the payload rather than an
         explicit identifier: each asset's own id/path/site fields are used
-        to build its per-request identifier (see `identifier_from_asset`),
+        to build its per-request identifier (see `edit_log_identifier_from_asset`),
         and the chain's own logging identifier is captured from it too when
         this is the chain's only node (see `_build_edit_requests`).
 
@@ -331,10 +332,10 @@ class OperationChain:
             multi=multi,
         )
 
-    def _edit_identifier(self, asset: Asset) -> IdentifierType:
+    def _edit_identifier(self, asset: Asset) -> AssetLogIdentifier:
         """Resolve the identifier an `edit` request/chain reports itself under.
 
-        Raises clearly here (rather than letting `identifier_from_asset`'s
+        Raises clearly here (rather than letting `edit_log_identifier_from_asset`'s
         bare `UUID(None)` failure surface) because a missing id on this
         specific call path means a synthetic create()-style `Asset` was
         routed through `edit()` by mistake, not a generally-tolerable gap.
@@ -348,7 +349,7 @@ class OperationChain:
                 "'id'. This usually means an Asset built for create() was "
                 "routed through edit() by mistake."
             )
-        return identifier_from_asset(asset)
+        return edit_log_identifier_from_asset(asset)
 
     def _build_edit_requests(
         self,

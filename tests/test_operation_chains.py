@@ -19,7 +19,7 @@ from cascade_cms.cmstypes import (
     CascadeSuccess,
     IdentifierType,
     Path,
-    identifier_from_asset,
+    edit_log_identifier_from_asset,
 )
 from cascade_cms.driver import CascadeCMSRestDriver
 from cascade_cms.operation_logger import OperationLogger
@@ -741,7 +741,7 @@ class TestAssetIdentifierTracking:
 
     def test_standalone_edit_derives_identifier_from_asset(self, operations):
         """A bare `edit(asset)` with no prior read derives its own chain
-        identifier from the asset's id/type/path fields (identifier_from_asset),
+        identifier from the asset's id/type fields (edit_log_identifier_from_asset),
         since edit() no longer takes an explicit identifier argument."""
         asset = make_asset(
             id=ID_ONE, name="Updated", path="/page-1", siteName="mysite"
@@ -749,7 +749,7 @@ class TestAssetIdentifierTracking:
 
         chain = operations.edit(asset)
 
-        assert chain._asset_identifier == identifier_from_asset(asset)
+        assert chain._asset_identifier == edit_log_identifier_from_asset(asset)
 
 
 # ============================================================================
