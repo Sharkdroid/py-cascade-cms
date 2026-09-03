@@ -17,10 +17,6 @@ CLAUDE.md
 #logs
 logs/
 
-# intermediate skill files
-skill/cascade-script-writer/
-skill/cascade-script-writer-lite/
-
 # Cache
 cache/
 .pytest_cache/
@@ -29,7 +25,6 @@ cache/
 
 # Environment / secrets
 .env
-tests/mcp/output.txt
 
 # Editors
 .vscode/

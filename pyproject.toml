@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cascade-cms-rest"
-version = "3.1.2"
+version = "3.1.3"
 description = "A typed, async REST client for Hannon Hill Cascade CMS"
 readme = "README.md"
 license = "MIT"
@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "pytest-asyncio", "mypy", "ruff", "build", "twine>=7.0.0", "mcp>=2.1.0,<3", "uv"]
+dev = ["pytest", "pytest-asyncio", "mypy", "ruff", "build", "twine>=7.0.0"]
 
 [project.urls]
 Homepage = "https://github.com/Sharkdroid/py-cascade-cms"
@@ -26,15 +26,7 @@ Homepage = "https://github.com/Sharkdroid/py-cascade-cms"
 packages = ["src/cascade_cms"]
 
 [tool.ruff]
-# Verbatim snapshot of src/cascade_cms/, synced by skill/build_skill.py — it is
-# linted at its source, and diverging the copy to satisfy ruff would break the
-# byte-for-byte parity the bundle manifest checks.
-# Skill bundle contents are not library code: cascade_cms/ is a vendored
-# snapshot, and templates/ and scripts/ are standalone files that ship to end
-# users. Only the builders at skill/*.py are linted.
 exclude = [
-    "skill/cascade-script-writer",
-    "skill/cascade-script-writer-lite",
     # Manual human-run scripts against a live Cascade instance (see their own
     # docstrings) — not library code or automated tests, so lint rules aimed
     # at production code (narrow excepts, custom exception types, ...) don't
@@ -43,5 +35,4 @@ exclude = [
     # execute) them as test modules.
     "tests/edit_test.py",
     "tests/testing.py",
-    "tests/mcp/smoke_test.py",
 ]

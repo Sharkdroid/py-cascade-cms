@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.1.3]
+
+`skill/` and the in-progress MCP server moved to their own repo, `cascade-cms-tools`, keeping this repo focused on just the library. Added a `py.typed` marker so external type checkers can resolve this library's types.
+
+**Files changed:** `skill/` (removed), `src/cascade_cms/mcp/` (removed), `tests/mcp/` (removed), `src/cascade_cms/py.typed` (added), `MCP_IMPLEMENTATION_PLAN_REV.md` (removed), `pyproject.toml`, `.gitignore`, `AGENTS.md`
+
 ## [3.1.2]
 
 `Asset.get()` now raises `KeyError` instead of silently returning `None`; `Asset.asset_type` renamed to `internal_type` (dropping the `scriptformat` normalization); `identifier_from_asset()` renamed to `edit_log_identifier_from_asset()` and now returns a lightweight `AssetLogIdentifier` instead of a full `IdentifierType`.
