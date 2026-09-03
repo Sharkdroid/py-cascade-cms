@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cascade-cms-rest"
-version = "3.1.1"
+version = "3.1.2"
 description = "A typed, async REST client for Hannon Hill Cascade CMS"
 readme = "README.md"
 license = "MIT"

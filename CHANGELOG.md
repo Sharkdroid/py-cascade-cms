@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.1.2]
+
+`Asset.get()` now raises `KeyError` instead of silently returning `None`; `Asset.asset_type` renamed to `internal_type` (dropping the `scriptformat` normalization); `identifier_from_asset()` renamed to `edit_log_identifier_from_asset()` and now returns a lightweight `AssetLogIdentifier` instead of a full `IdentifierType`.
+
+**Files changed:** `src/cascade_cms/cmstypes.py`, `src/cascade_cms/operations.py`
+
 ## [3.1.1]
 
 ### Fixed
