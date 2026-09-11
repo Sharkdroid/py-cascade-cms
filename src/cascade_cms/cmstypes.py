@@ -264,10 +264,7 @@ class SimplePayload(BaseModel):
 
         """
         subclass_name = self.__class__.__name__
-        try:
-            fields_info = self.__pydantic_fields__  # Pydantic V3
-        except AttributeError:
-            fields_info = self.model_fields  # Pydantic V2
+        fields_info = self.__class__.model_fields
 
         def dump(value: Any) -> Any:
             # This dict comprehension only aliases top-level keys; a nested
@@ -797,15 +794,15 @@ class CascadeError(BaseModel):
     """Represents a Cascade API-level failure response (`{"success": false, "message": ...}`)."""
 
     model_config = ConfigDict(frozen=True, extra='forbid')
-    success: bool = False
+    success: Literal[False] = False
     message: str = ""
 
 
 class CascadeSuccess(BaseModel):
     """Represents a Cascade API-level success response with no further data (`{"success": true}`)."""
 
-    model_config = ConfigDict(frozen=True)
-    success: bool = True
+    model_config = ConfigDict(frozen=True, extra='forbid')
+    success: Literal[True] = True
 
 
 # ----- Parameter Payloads (sent to specific endpoints) -----
