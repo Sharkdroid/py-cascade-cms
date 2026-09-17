@@ -1,4 +1,3 @@
-
 import json
 import uuid
 from datetime import datetime
@@ -14,6 +13,7 @@ from typing import (
     TypeVar,
     cast,
 )
+import warnings
 
 from pydantic import (
     AliasChoices,
@@ -628,11 +628,27 @@ class Asset:
         """
         return self._asset_type.lower()
 
-    def get(self, key: str):
-        """Access _data fields, raising KeyError if missing."""
-        if key not in self._data:
-            raise KeyError(f"Field '{key}' not found")
-        return self._data[key]
+    def get(self, key: str, max_depth=5):
+        keys = key.split(".")
+
+        if keys[0] in ("structuredData", "pageConfigurations"):
+            warnings.warn("Use the designated functions for structuredData and ...")
+        if len(keys) > max_depth:
+            raise ValueError(f"{key} exceeds max depth of {max_depth}")
+
+        def recursive(data, index=0):
+            if index == len(keys):
+                return data
+            cur_search_node = keys[index]
+
+            if not isinstance(data, dict):
+                raise KeyError(f"Cannot traverse into non-dict value at '{cur_search_node}'")
+
+            if cur_search_node not in data:
+                raise KeyError(f"{cur_search_node} not in data")
+
+            return recursive(data[cur_search_node], index=index + 1)
+        return recursive(self._data)
 
     def get_data_structure(self: 'Asset', group: str, identifier: str) -> list[dict[str, Any]] | None:
         """
