@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.2.1]
+
+### Fixed
+- `OperationLogger.log_python_error()`'s console `[ERROR]` line now also
+  carries the `[NETWORK]`/`[CASCADE-REST-CMS]` prefix for a batch-level
+  failure — per A1, the prefix was already applied to the logfile's
+  `!ERROR:` line in 3.2.0, but not to the console line.
+
+**Files changed:** `src/cascade_cms/operation_logger.py`,
+`tests/test_operation_logger.py`, `tests/test_wrapper.py`
+
 ## [3.2.0]
 
 Failure handling moves out of user scripts and into the library. No more

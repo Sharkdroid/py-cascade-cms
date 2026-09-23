@@ -4,6 +4,7 @@ Test suite for the D5/D8/D9 error-handling redesign: failure classification,
 """
 
 import asyncio
+import io
 import subprocess
 import sys
 import textwrap
@@ -202,6 +203,51 @@ class TestSubmitRequestsChainResults:
         assert results.failed[0].category == FailureCategory.CALLBACK
         assert wrapper._callback_failures == [results.failed[0]]
         assert wrapper._has_reportable_failure is False
+
+    def test_other_chains_finish_before_callback_exception_is_raised(self):
+        """Chain 1's callback raises; chain 2 has no callback and should
+        still complete and land in `.ok` — a callback exception stops only
+        its own chain."""
+        driver = StubDriver([[make_asset(id=ID_ONE)], [make_asset(id=ID_TWO)]])
+        wrapper = make_wrapper(driver)
+
+        def boom(_asset):
+            raise ValueError("bad asset")
+
+        wrapper.operations.read(IdentifierType(id=ID_ONE, type="page")).then(boom)
+        wrapper.operations.read(IdentifierType(id=ID_TWO, type="page"))
+
+        try:
+            results = wrapper.submit_requests()
+        finally:
+            driver.eventLoop.close()
+
+        assert len(results.ok) == 1
+        assert results.ok[0].get("id") == ID_TWO
+        assert len(results.failed) == 1
+        assert results.failed[0].category == FailureCategory.CALLBACK
+
+    def test_batch_error_console_line_carries_prefix(self, tmp_path):
+        logger = OperationLogger(server="TESTSRV", debug_config={"log_dir": str(tmp_path)})
+        buffer = io.StringIO()
+        logger._console_logger.handlers[0].stream = buffer
+
+        driver = StubDriver([])
+        wrapper = make_wrapper(driver, logger=logger)
+        wrapper.operations.read(IdentifierType(id=ID_ONE, type="page"))
+
+        async def _broken_execute_chains(chains, executor=None):
+            raise RuntimeError("event loop broke")
+
+        wrapper._execute_chains = _broken_execute_chains
+
+        try:
+            with pytest.raises(CascadeBatchError):
+                wrapper.submit_requests()
+        finally:
+            driver.eventLoop.close()
+
+        assert "[ERROR]: [CASCADE-REST-CMS] RuntimeError — check log" in buffer.getvalue()
 
     def test_empty_queue_returns_empty_chain_results(self):
         driver = StubDriver([])

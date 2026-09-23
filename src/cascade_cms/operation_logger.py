@@ -423,13 +423,14 @@ class OperationLogger:
     def log_python_error(self, exc: Exception, prefix: str = "") -> None:
         """Log a Python exception outside of chain context. See `log_cascade_error`.
 
-        `prefix` (e.g. `"[CASCADE-REST-CMS] "`) is prepended to the
-        `!ERROR:` message — used for a batch-level failure (D6/A1), left
-        empty for a cleanup-time error, which isn't a classified failure.
+        `prefix` (e.g. `"[CASCADE-REST-CMS] "`) is prepended to both the
+        console `[ERROR]` line and the logfile's `!ERROR:` message — used
+        for a batch-level failure (D6/A1), left empty for a cleanup-time
+        error, which isn't a classified failure.
         """
         exc_type = type(exc).__name__
         exc_msg = str(exc)
-        self._console(f"[ERROR]: {exc_type} — check log")
+        self._console(f"[ERROR]: {prefix}{exc_type} — check log")
 
         tb = traceback.extract_tb(exc.__traceback__)
         frame_info = tb[-1] if tb else None

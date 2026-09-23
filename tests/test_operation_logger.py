@@ -347,6 +347,41 @@ class TestBatchFraming:
         assert logger._failed_count == 1
 
 
+class TestExitTallyLine:
+    """D9: log_exit()'s printed tally line, exact strings."""
+
+    def _console(self, logger: OperationLogger) -> io.StringIO:
+        buffer = io.StringIO()
+        logger._console_logger.handlers[0].stream = buffer
+        return buffer
+
+    def test_all_succeeded(self, tmp_path):
+        logger = OperationLogger(server="test", debug_config={"log_dir": str(tmp_path)})
+        buffer = self._console(logger)
+        logger.log_batch_start()
+        logger.log_batch_end(succeeded=5, total=5, has_reportable_failure=False)
+        logger.log_exit()
+        assert "0 failed, 5 succeeded" in buffer.getvalue()
+        assert "reference log for details" not in buffer.getvalue()
+
+    def test_reportable_failure_appends_suffix(self, tmp_path):
+        logger = OperationLogger(server="test", debug_config={"log_dir": str(tmp_path)})
+        buffer = self._console(logger)
+        logger.log_batch_start()
+        logger.log_batch_end(succeeded=3, total=5, has_reportable_failure=True)
+        logger.log_exit()
+        assert "2 failed, 3 succeeded: reference log for details" in buffer.getvalue()
+
+    def test_callback_only_failure_has_no_suffix(self, tmp_path):
+        logger = OperationLogger(server="test", debug_config={"log_dir": str(tmp_path)})
+        buffer = self._console(logger)
+        logger.log_batch_start()
+        logger.log_batch_end(succeeded=4, total=5, has_reportable_failure=False)
+        logger.log_exit()
+        assert "1 failed, 4 succeeded" in buffer.getvalue()
+        assert "reference log for details" not in buffer.getvalue()
+
+
 # ============================================================================
 # Normal (non-debug) mode
 # ============================================================================
