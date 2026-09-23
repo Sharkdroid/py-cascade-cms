@@ -62,13 +62,52 @@ with CascadeWrapperBase(environment_variables, configuration_variables) as casca
   first chain. No more matching responses back to requests by hand.
 - **Failures are values, not gaps.** A chain stops at its first failure and that object lands in
   the results: a `CascadeError` when the API rejects a request, or the exception a callback
-  raised. Other chains are unaffected. Check with `isinstance(result, CascadeError)`.
+  raised. Other chains are unaffected. `submit_requests()` returns a `ChainResults` — still a
+  list, in that same chain-creation order — with `.ok` (results from chains that didn't fail)
+  and `.failed` (a `ChainFailure` per failed chain, naming the exact step and its category) added.
+  There's no need for an `isinstance(result, CascadeError)` check or a `try/except` around
+  `submit_requests()` — `CascadeWrapperBase` owns whether a failure ends the script; see
+  "Error handling" below.
 - **A callback returning `None`** passes the previous result through, so side-effect callbacks
   (logging, reporting) don't break the chain.
 - **`edit()` accepts a callable** as its payload; it is invoked with the previous step's result,
   which is how a transformed asset gets written back.
 - Chains are cleared once `submit_requests()` returns, so a callback registered for one batch
   never re-runs in the next.
+
+### Error handling
+
+Failure handling lives in the library, not in your script. `CascadeWrapperBase`'s context
+manager owns it end to end:
+
+- No `try/except` around `submit_requests()`, and no `isinstance()` checks in your script —
+  read `.ok`/`.failed` off the `ChainResults` it returns instead.
+- If the batch itself breaks (not an individual chain — e.g. the driver's event loop fails),
+  `submit_requests()` raises `CascadeBatchError` rather than returning an empty list.
+- At `with`-block exit, with `exit_on_failure=True` (the default), any recorded failure ends the
+  script with a non-zero exit code — **code written after the `with` block does not run** in
+  that case. A callback exception is re-raised unwrapped (plain traceback); a
+  `CascadeError`/network/library-side failure raises `SystemExit(1)` with no extra traceback,
+  since it was already logged.
+- Pass `exit_on_failure=False` to embed the wrapper in a longer-lived process (e.g. an MCP
+  server) — `__exit__` then never raises; read `.ok`/`.failed` off the results yourself.
+- The logfile's `!ERROR:` line is prefixed `[NETWORK]` for a network-layer failure or
+  `[CASCADE-REST-CMS]` for any other library-side failure; a `CascadeError` or a callback
+  exception gets no prefix.
+- At exit, the console always prints a tally: `"{failed} failed, {succeeded} succeeded"`,
+  cumulative across every `submit_requests()` call in the session, with `": reference log for
+  details"` appended only when at least one failure came from the API, the network, or the
+  library itself (not from a callback-only failure).
+
+```python
+with CascadeWrapperBase(environment_variables, configuration_variables) as cascade:
+    cascade.operations.read(identifier)
+    results = cascade.submit_requests(Asset)
+    for asset in results.ok:
+        ...  # only successful reads
+# If anything failed, execution never reaches here — the with block already
+# raised (or exited) on the way out.
+```
 
 ### Logging
 

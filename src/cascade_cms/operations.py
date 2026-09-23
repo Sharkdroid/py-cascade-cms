@@ -44,6 +44,7 @@ from .cmstypes import (
     workflowTransitionInformation,
 )
 from .driver import CascadeCMSRestDriver, RequestExecutor
+from .failures import ChainFailure, FailureCategory, classify_failure
 from .operation_logger import ChainLineBuilder, OperationLogger
 
 NodeType = Literal["operation", "callback"]
@@ -110,6 +111,7 @@ class OperationChain:
     _asset_identifier: IdentifierType | Path | AssetLogIdentifier | None = None
     _index: int = 0
     _line: ChainLineBuilder = field(default_factory=ChainLineBuilder)
+    failure: ChainFailure | None = None
 
     # ------------------------------------------------------------------ #
     # Chain building                                                       #
@@ -653,7 +655,7 @@ class OperationChain:
             requests = builder(previous)
         return requests
 
-    def _resolve_operation_result(self, node: Node, raw: Any) -> tuple[Any, bool]:
+    def _resolve_operation_result(self, node: Node, raw: Any, step: int) -> tuple[Any, bool]:
         """Turn a driver response into this node's result and a stop flag.
 
         A node built from a list of identifiers keeps its list shape (errors
@@ -665,10 +667,34 @@ class OperationChain:
         results = list(raw) if isinstance(raw, list) else [raw]
 
         if data.get("multi"):
+            first_error = next(
+                (item for item in results if isinstance(item, CascadeError | Exception)),
+                None,
+            )
+            if first_error is not None and self.failure is None:
+                self._record_failure(step, node, first_error)
             return results, False
 
         value = results[0] if results else None
         return value, isinstance(value, CascadeError | Exception)
+
+    def _record_failure(self, step: int, node: Node, error: Any) -> ChainFailure:
+        """Build and store the chain's `ChainFailure` record (first one wins)."""
+        category: FailureCategory = classify_failure(node.node_type, error)
+        message, _file, _line = self._error_location(error)
+        failure = ChainFailure(
+            chain_index=self._index,
+            identifier=self._asset_identifier,
+            step=step,
+            step_name=node.name,
+            node_type=node.node_type,
+            category=category,
+            error=error,
+            message=message,
+        )
+        if self.failure is None:
+            self.failure = failure
+        return failure
 
     def _run_callback_sync(
         self,
@@ -798,23 +824,23 @@ class OperationChain:
                     requests = self._node_requests(node, result)
                 except Exception as exc:  # noqa: BLE001 - chain reports, never raises
                     self._start_line_if_needed()
-                    return self._stopped(step, exc)
+                    return self._stopped(step, exc, node)
                 self._start_line_if_needed()
                 self._log_requests(requests)
                 try:
                     raw = driver._submitRequests(requests)
                 except Exception as exc:  # noqa: BLE001 - chain reports, never raises
-                    return self._stopped(step, exc)
-                value, stop = self._resolve_operation_result(node, raw)
+                    return self._stopped(step, exc, node)
+                value, stop = self._resolve_operation_result(node, raw, step)
                 if stop:
-                    return self._stopped(step, value)
+                    return self._stopped(step, value, node)
                 last_node_was_operation = True
             else:
                 try:
                     value = self._run_callback_sync(node, result, driver, executor)
                 except Exception as exc:  # noqa: BLE001 - chain reports, never raises
                     self._line.append_step(node.name)
-                    return self._stopped(step, exc)
+                    return self._stopped(step, exc, node)
                 self._line.append_step(f"{node.name}: {type(value).__name__}")
                 last_node_was_operation = False
 
@@ -862,23 +888,23 @@ class OperationChain:
                     requests = self._node_requests(node, result)
                 except Exception as exc:  # noqa: BLE001 - chain reports, never raises
                     self._start_line_if_needed()
-                    return self._stopped(step, exc)
+                    return self._stopped(step, exc, node)
                 self._start_line_if_needed()
                 self._log_requests(requests)
                 try:
                     raw = await self._driver.execute_requests(requests)
                 except Exception as exc:  # noqa: BLE001 - chain reports, never raises
-                    return self._stopped(step, exc)
-                value, stop = self._resolve_operation_result(node, raw)
+                    return self._stopped(step, exc, node)
+                value, stop = self._resolve_operation_result(node, raw, step)
                 if stop:
-                    return self._stopped(step, value)
+                    return self._stopped(step, value, node)
                 last_node_was_operation = True
             else:
                 try:
                     value = await self._run_callback_async(node, result, executor)
                 except Exception as exc:  # noqa: BLE001 - chain reports, never raises
                     self._line.append_step(node.name)
-                    return self._stopped(step, exc)
+                    return self._stopped(step, exc, node)
                 self._line.append_step(f"{node.name}: {type(value).__name__}")
                 last_node_was_operation = False
 
@@ -892,9 +918,10 @@ class OperationChain:
             self._logger.flush_chain(self._line)
         return result
 
-    def _stopped(self, step: int, error: Any) -> Any:
-        """Flush the chain's line plus its `v`/`!ERROR:` block, once, and
-        hand back `error` as the chain's result.
+    def _stopped(self, step: int, error: Any, node: Node) -> Any:
+        """Record the chain's `ChainFailure`, flush the chain's line plus
+        its `v`/`!ERROR:` block, once, and hand back `error` as the chain's
+        result.
 
         `step` is 1-based and, by construction, always equals the number of
         segments already appended to `self._line` (every code path above
@@ -902,9 +929,12 @@ class OperationChain:
         continuing to the next node or calling this) — so `step - 1` is the
         failing segment's own index.
         """
+        failure = self._record_failure(step, node, error)
         if self._logger:
-            message, file, line = self._error_location(error)
-            self._logger.flush_chain_error(self._line, step - 1, message, file, line)
+            _message, file, line = self._error_location(error)
+            self._logger.flush_chain_error(
+                self._line, step - 1, failure.message, file, line, failure.category
+            )
         return error
 
 

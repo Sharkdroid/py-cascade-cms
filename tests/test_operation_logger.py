@@ -343,7 +343,8 @@ class TestBatchFraming:
         logger.log_batch_end(succeeded=1, total=1)
 
         assert logger._processed_count == 4
-        assert logger._error_count == 1
+        assert logger._succeeded_count == 3
+        assert logger._failed_count == 1
 
 
 # ============================================================================

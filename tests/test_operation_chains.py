@@ -963,6 +963,8 @@ class TestWrapperIntegration:
         wrapper._driver = driver
         wrapper._logger = logger
         wrapper.operations = Operations(driver, _logger=logger)
+        wrapper._callback_failures = []
+        wrapper._has_reportable_failure = False
 
         def boom(result):
             raise ValueError("bad asset")
@@ -1052,6 +1054,8 @@ class TestEndToEndLoggedOutput:
         wrapper._driver = driver
         wrapper._logger = logger
         wrapper.operations = Operations(driver, _logger=logger)
+        wrapper._callback_failures = []
+        wrapper._has_reportable_failure = False
 
         def bad_transform(_asset):
             raise TypeError("expected a dict, got an Asset")

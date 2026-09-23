@@ -2,6 +2,68 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.2.0]
+
+Failure handling moves out of user scripts and into the library. No more
+`try/except` around `submit_requests()`, no more `isinstance(result,
+CascadeError)` checks — `CascadeWrapperBase`'s context manager now owns
+failure reporting and the script's exit code.
+
+### Added
+- `cascade_cms.failures` (new module, not re-exported from
+  `cascade_cms/__init__.py` — import it directly): `FailureCategory`
+  (`CASCADE`/`NETWORK`/`LIBRARY`/`CALLBACK`), `ChainFailure` (records
+  where and why a chain stopped: chain index, identifier, step, step
+  name, node type, category, the original error, and a display message),
+  `classify_failure()`, and `CascadeBatchError`.
+- `submit_requests()` now returns `ChainResults` — a `list` subclass
+  (indexing/iteration/`len()` unchanged) with `.ok` (results from chains
+  that didn't fail) and `.failed` (a `ChainFailure` per failed chain).
+- `CascadeWrapperBase.__init__` gains `exit_on_failure: bool = True`. With
+  the default, `__exit__` ends the script with a non-zero exit code when
+  anything failed — a callback exception is re-raised unwrapped, any other
+  recorded failure raises `SystemExit(1)`. Code after the `with` block
+  does not run in either case. Pass `False` to embed the wrapper in a
+  longer-lived process (e.g. an MCP server), where `__exit__` never
+  raises.
+- The logfile's `!ERROR:` line is now prefixed `[NETWORK]` for a
+  network-layer failure or `[CASCADE-REST-CMS]` for any other library-side
+  failure at an operation step; a `CascadeError` or a callback exception
+  gets no prefix.
+- `OperationLogger.log_exit()` now always prints a cumulative tally —
+  `"{failed} failed, {succeeded} succeeded"` — appending `": reference log
+  for details"` only when at least one failure came from the API, the
+  network, or the library itself (not a callback-only failure).
+
+### Changed
+- `submit_requests()` no longer swallows a batch-level failure and returns
+  an empty list — it raises `CascadeBatchError` (chained `from` the
+  original exception) instead. An empty chain queue still returns an
+  empty `ChainResults`.
+
+### Removed
+- The dead `RuntimeWarning` carve-out in `CascadeWrapperBase.__exit__`
+  (it compared the exception *class* against `RuntimeWarning` with
+  `isinstance()`, which can never be true, so the "documented" carve-out
+  never actually fired).
+- `OperationLogger`'s old `[ERRORS]: N failure(s) — check <logfile>` exit
+  line — replaced by the tally line above.
+
+### Breaking
+- A batch-level failure now raises `CascadeBatchError` instead of
+  `submit_requests()` returning `[]`.
+- `CascadeWrapperBase.__init__` defaults `exit_on_failure=True`: a script
+  that previously relied on inspecting `submit_requests()`'s return value
+  itself and continuing past the `with` block regardless of failures will
+  now exit non-zero (or have a callback exception re-raised) when
+  anything failed, instead of continuing.
+
+**Files changed:** `src/cascade_cms/failures.py` (added),
+`src/cascade_cms/operations.py`, `src/cascade_cms/wrapper.py`,
+`src/cascade_cms/operation_logger.py`, `tests/test_wrapper.py` (added),
+`tests/test_operation_chains.py`, `tests/test_operation_logger.py`,
+`README.md`
+
 ## [3.1.3]
 
 `skill/` and the in-progress MCP server moved to their own repo, `cascade-cms-tools`, keeping this repo focused on just the library. Added a `py.typed` marker so external type checkers can resolve this library's types.

@@ -39,6 +39,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .failures import FailureCategory
+
+_CATEGORY_PREFIX = {
+    FailureCategory.NETWORK: "[NETWORK] ",
+    FailureCategory.LIBRARY: "[CASCADE-REST-CMS] ",
+}
+
 # Distinguishes loggers built within the same second, which would otherwise
 # share one underlying logging.Logger and cross-write into each other's files.
 _logger_serial = itertools.count()
@@ -161,8 +168,12 @@ class OperationLogger:
         self._server = server
         self._config: dict[str, Any] = debug_config if debug_config is not None else {}
         self._is_debug = debug_config is not None
-        self._error_count = 0  # cumulative across every batch, reported at exit
         self._processed_count = 0  # cumulative across every batch
+        self._succeeded_count = 0  # cumulative across every batch
+        self._failed_count = 0  # cumulative across every batch
+        # True once any CASCADE/NETWORK/LIBRARY failure has been reported
+        # (never set for a callback-only failure — see D9/A3).
+        self._has_reportable_failure = False
         self._start_time: datetime | None = None
         self._script_name: str = ""
 
@@ -238,14 +249,10 @@ class OperationLogger:
             f"[DONE]: {self._processed_count} assets processed "
             f"in {elapsed:.1f}s"
         )
-        if self._error_count > 0:
-            log_filename = self._file_logger.handlers[0].baseFilename \
-                if self._file_logger.handlers else "logfile"
-            self._console(
-                f"[ERRORS]: {self._error_count} failure"
-                f"{'s' if self._error_count > 1 else ''} — "
-                f"check {Path(log_filename).name}"
-            )
+        tally = f"{self._failed_count} failed, {self._succeeded_count} succeeded"
+        if self._has_reportable_failure:
+            tally += ": reference log for details"
+        self._console(tally)
         self._console("[EXIT]: Disconnecting from " + self._server)
 
     # ------------------------------------------------------------------ #
@@ -264,16 +271,24 @@ class OperationLogger:
         else:
             self._console(f"[RUNNING]: {self._script_name}")
 
-    def log_batch_end(self, succeeded: int, total: int) -> None:
+    def log_batch_end(
+        self, succeeded: int, total: int, has_reportable_failure: bool = False
+    ) -> None:
         """Close one batch's bracket and report its tally.
 
         `succeeded`/`total` are supplied by the caller (already known from
         the batch's own results) rather than tracked incrementally here, so
         this is the single place both the per-batch and the running
-        session-total (`log_exit`) counts are updated.
+        session-total (`log_exit`) counts are updated. `has_reportable_failure`
+        is True when at least one failure in this batch is category
+        CASCADE/NETWORK/LIBRARY (never set for callback-only failures, per
+        A3) — it only ever turns the session-level flag on, never off.
         """
         self._processed_count += total
-        self._error_count += total - succeeded
+        self._succeeded_count += succeeded
+        self._failed_count += total - succeeded
+        if has_reportable_failure:
+            self._has_reportable_failure = True
         self._console(f"{succeeded}/{total} succeeded")
         if self._is_debug:
             self._write(f"{succeeded}/{total} succeeded")
@@ -294,16 +309,22 @@ class OperationLogger:
         message: str,
         file: str,
         line: int,
+        category: FailureCategory,
     ) -> None:
         """Write a stopped chain's line plus its `v`/`!ERROR:` block.
 
         Writes the pipeline text (via `render_complete()`, since the
         failing step's own label is already the last appended segment —
         see `ChainLineBuilder.render_error`) followed by the alignment
-        block, all in one flush.
+        block, all in one flush. Per A1, `[NETWORK]`/`[CASCADE-REST-CMS]`
+        is prepended to the `!ERROR:` message for NETWORK/LIBRARY failures;
+        CASCADE and CALLBACK get no prefix.
         """
+        prefixed_message = _CATEGORY_PREFIX.get(category, "") + message
         self._write(builder.render_complete())
-        v_line, error_block = builder.render_error(failing_step_index, message, file, line)
+        v_line, error_block = builder.render_error(
+            failing_step_index, prefixed_message, file, line
+        )
         self._write(v_line)
         self._write(error_block)
 
@@ -399,8 +420,13 @@ class OperationLogger:
         self._write("v")
         self._write(f"!ERROR: {message}")
 
-    def log_python_error(self, exc: Exception) -> None:
-        """Log a Python exception outside of chain context. See `log_cascade_error`."""
+    def log_python_error(self, exc: Exception, prefix: str = "") -> None:
+        """Log a Python exception outside of chain context. See `log_cascade_error`.
+
+        `prefix` (e.g. `"[CASCADE-REST-CMS] "`) is prepended to the
+        `!ERROR:` message — used for a batch-level failure (D6/A1), left
+        empty for a cleanup-time error, which isn't a classified failure.
+        """
         exc_type = type(exc).__name__
         exc_msg = str(exc)
         self._console(f"[ERROR]: {exc_type} — check log")
@@ -411,7 +437,7 @@ class OperationLogger:
         line_no = frame_info.lineno if frame_info else 0
 
         self._write("v")
-        self._write(f"!ERROR: {exc_type}: {exc_msg} @{file_name}:{line_no}")
+        self._write(f"!ERROR: {prefix}{exc_type}: {exc_msg} @{file_name}:{line_no}")
 
     # ------------------------------------------------------------------ #
     # Helpers                                                              #
