@@ -34,13 +34,13 @@ class CascadeWrapperBase:
     code — code written after the `with` block does NOT run in that case.
     Pass `exit_on_failure=False` (e.g. when embedding this in a longer-lived
     process, such as an MCP server) to have `__exit__` never raise; results
-    stay available to the caller as values via `.ok`/`.failed`.
+    stay available to the caller as values via `.success`/`.failed`.
 
     Use as:
         with CascadeWrapperBase(env_vars, config_vars) as cascade:
             cascade.operations.read(identifier)
             results = cascade.submit_requests()
-            # results.ok / results.failed — no isinstance() checks needed.
+            # results.success / results.failed — no isinstance() checks needed.
     """
 
     def __enter__(self):
@@ -158,7 +158,7 @@ class CascadeWrapperBase:
         other chain.
 
         Returns a `ChainResults` — a list, in **chain-creation order** (so
-        `results[0]` belongs to the first chain built), with `.ok` (results
+        `results[0]` belongs to the first chain built), with `.success` (results
         from chains that didn't fail) and `.failed` (a `ChainFailure` per
         failed chain, naming the exact step and its category) added. Raw
         values (a `CascadeError`, or the exception a callback raised) stay

@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.2.2]
+
+### Added
+- `create()` and `delete()` accept a callable, like `edit()`: it receives the previous node's result and returns the `NewAsset`(s) / identifier(s), so `read → then → create → delete` can be one chain.
+
+### Fixed
+- `ListElements` now accepts the `audits` key, so `readAudits` responses parse.
+- `WorkflowAction.next_id` now validates from the `nextId` key Cascade sends.
+- A deferred (callable-payload) node that resolves to several requests now keeps every result instead of only the first, so partial failures no longer stop the chain (also applies to `edit`).
+
+### Changed
+- **`ChainResults.ok` renamed to `ChainResults.success`** (`.failed` is unchanged; no `.ok` alias is kept). The batch console line still reports `N/M succeeded`, where N is the number of chains without a failure, i.e. `len(results.success)` for single-result chains.
+- **Snake_case field names on every Pydantic model.** camelCase is now only the wire name: accepted when validating (`validation_alias`) and still written on requests (`serialization_alias`), so request bodies are unchanged. Renamed: `PageConfiguration.pageRegions` → `page_regions`; `CheckedOutAsset.workingCopyIdentifier` → `working_copy_identifier`; `SearchInformation` `siteName`/`searchTerms`/`searchFields`/`searchTypes` → `site_name`/`search_terms`/`search_fields`/`search_types`; `auditParameters` `auditType`/`startDate`/`endDate` → `audit_type`/`start_date`/`end_date`; `workflowSettingsPayload` `apply*ToChildren` → `apply_*_to_children`. Existing `alias=` fields moved to explicit validation/serialization aliases so type checkers see the snake_case constructor names. `NewAsset` now validates by alias as well as by name (`site_id=` and `siteId=` both work). The former `TypedDict` shapes are now frozen/validated Pydantic models with snake_case attributes: `PathBase`/`Path` (`site_id`, `site_name`; `Path` also exposes `get_id`/`get_type`/`get_path`), `WorkflowSettingsModel`, `Entries`, `AccessRightsModel` (`all_level`), `WorkflowAction`, `WorkflowSteps`, `Audit`. Dict-style access (`path["siteName"]`, `payload.body["identifier"]`) becomes attribute access, and `PathBase.site_id` now serializes as bare hex like `IdentifierType`.
+- **`auditParameters` no longer takes an `IdentifierType`.** `readAudits` now takes plain strings via `username`, `groupname`, or `rolename`; at least one is required. Auditing by entity identifier is no longer supported through this payload.
+
+**Files changed:** `src/cascade_cms/cmstypes.py`, `src/cascade_cms/operations.py`, `src/cascade_cms/failures.py`, `src/cascade_cms/wrapper.py`, `README.md`, `tests/test_cmstypes.py`, `tests/test_operation_chains.py`, `tests/test_wrapper.py`, `pyproject.toml`
+
 ## [3.2.1]
 
 ### Fixed

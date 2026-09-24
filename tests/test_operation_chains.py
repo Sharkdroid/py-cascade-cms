@@ -1120,3 +1120,58 @@ class TestEndToEndLoggedOutput:
         assert expected_line in lines
         assert f"{expected_line} -> Asset" not in lines
         assert "1/1 succeeded" in lines
+
+
+# ============================================================================
+# Callable create()/delete() payloads
+# ============================================================================
+
+class TestCallableCreateDelete:
+    """read → create(fn) → delete(fn) in one chain."""
+
+    def test_create_then_delete_resolve_from_previous_result(self, operations, mock_driver):
+        mock_driver._build_url.return_value = "http://cascade/api/x"
+        operations._logger.is_debug = False
+        read_id = IdentifierType(id=ID_ONE, type="page")
+        new_asset = MagicMock(asset_type="page")
+        created = make_asset(id=ID_TWO)
+        source = make_asset(id=ID_ONE, name="src")
+        seen = {}
+        mock_driver._submitRequests.side_effect = [
+            [source],
+            [created],
+            [CascadeSuccess()],
+        ]
+
+        def build_create(previous):
+            seen["create"] = previous
+            return new_asset
+
+        def pick_delete(previous):
+            seen["delete"] = previous
+            return read_id
+
+        chain = operations.read(read_id).create(build_create).delete(pick_delete)
+        result = chain.execute(mock_driver)
+
+        assert [n.operation_type for n in walk(chain)] == ["read", "create", "delete"]
+        assert seen["create"] is source
+        assert seen["delete"] is created
+        assert isinstance(result, CascadeSuccess)
+        delete_requests = mock_driver._submitRequests.call_args_list[2].args[0]
+        assert len(delete_requests) == 1
+        assert delete_requests[0].method == "POST"
+
+    def test_callable_returning_list_keeps_every_result(self, operations, mock_driver):
+        ids = [IdentifierType(id=ID_ONE, type="page"), IdentifierType(id=ID_TWO, type="page")]
+        err = CascadeError(success=False, message="nope")
+        mock_driver._submitRequests.side_effect = [
+            [make_asset(id=ID_ONE)],
+            [CascadeSuccess(), err],
+        ]
+
+        chain = operations.read(ids[0]).delete(lambda previous: ids)
+        result = chain.execute(mock_driver)
+
+        assert len(mock_driver._submitRequests.call_args_list[1].args[0]) == 2
+        assert result == [CascadeSuccess(), err]

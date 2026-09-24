@@ -255,11 +255,28 @@ class OperationChain:
 
     def delete(
         self,
-        identifier: IdentifierType | Path,
+        identifier: IdentifierType
+        | Path
+        | Callable[[Any], IdentifierType | Path | list[IdentifierType | Path]],
         payload: deleteParameters | None = None,
         parser=parse_success,
     ) -> Self:
-        """Append a POST `delete/{type}/{id-or-path}` step for an asset."""
+        """Append a POST `delete/{type}/{id-or-path}` step for an asset.
+
+        `identifier` may be a callable, in which case it is invoked with the
+        previous node's result when the chain runs and returns the
+        identifier (or list of identifiers) to delete — that is how
+        `read → then(...) → create → delete` works in one chain. A list from
+        a callable is one multi-request node (partial failures stay in the
+        result list instead of stopping the chain, like a multi `create`).
+        """
+        if callable(identifier):
+            builder = partial(
+                self._build_delete_requests, parser=parser, payload=payload, resolver=identifier
+            )
+            return self._add_operation(
+                "delete", None, payload=payload, parser=parser, builder=builder
+            )
         return self._identifier_operation(
             op_name="delete",
             method="POST",
@@ -268,9 +285,55 @@ class OperationChain:
             parser=parser,
         )
 
-    def create(self, payload: list[NewAsset] | NewAsset, parser=None) -> Self:
-        """Append a POST `create` step for one or more new assets."""
+    def _build_delete_requests(
+        self,
+        previous: Any,
+        *,
+        parser: Any,
+        payload: deleteParameters | None,
+        resolver: Callable[[Any], Any],
+    ) -> list[RequestExecutor]:
+        """Build the delete requests from a callable's resolved identifier(s)."""
+        resolved = resolver(previous)
+        identifiers = resolved if isinstance(resolved, list) else [resolved]
+        if self._asset_identifier is None and identifiers:
+            self._asset_identifier = identifiers[0]
+        return [
+            RequestExecutor(
+                self._driver._build_url("delete", *resolve_identifier(ident)),
+                "POST",
+                parser,
+                payload=payload,
+                identifier=ident,
+            )
+            for ident in identifiers
+        ]
+
+    def create(
+        self,
+        payload: list[NewAsset] | NewAsset | Callable[[Any], NewAsset | list[NewAsset]],
+        parser=None,
+    ) -> Self:
+        """Append a POST `create` step for one or more new assets.
+
+        `payload` may be a callable, in which case it is invoked with the
+        previous node's result when the chain runs and returns the new
+        asset(s) to create.
+        """
+        if callable(payload):
+            builder = partial(self._build_create_requests, resolver=payload)
+            return self._add_operation(
+                "create", None, payload=payload, parser=parser, builder=builder
+            )
         multi = isinstance(payload, list)
+        requests = self._build_create_requests(None, resolver=payload)
+        return self._add_operation(
+            "create", requests, payload=payload, parser=parser, multi=multi
+        )
+
+    def _build_create_requests(self, previous: Any, *, resolver: Any) -> list[RequestExecutor]:
+        """Build the create requests, resolving a callable payload if needed."""
+        payload = resolver(previous) if callable(resolver) else resolver
         assets: list[NewAsset] = payload if isinstance(payload, list) else [payload]
 
         requests: list[RequestExecutor] = []
@@ -286,10 +349,7 @@ class OperationChain:
                     parser=bound_parser,  # This now only expects (raw)
                 )
             )
-
-        return self._add_operation(
-            "create", requests, payload=payload, parser=parser, multi=multi
-        )
+        return requests
 
     def edit(
         self,
@@ -488,7 +548,6 @@ class OperationChain:
         return self._add_operation(
             "readAudits",
             [request],
-            identifier=payload.by_identifier,
             payload=payload,
             parser=parser,
         )
@@ -559,7 +618,7 @@ class OperationChain:
         parser=parse_success,
     ) -> Self:
         """Append a POST `editWorkflowSettings/{type}/{id}` step for an asset."""
-        id_fields = payload.body["identifier"]
+        id_fields = payload.body.identifier
         url = self._driver._build_url(
             "editWorkflowSettings",
             id_fields.get_type,
@@ -653,6 +712,10 @@ class OperationChain:
         if requests is None:
             builder = data["builder"]
             requests = builder(previous)
+            # A callable payload only reveals its size now: several requests
+            # means a multi node (keep every result, never stop on one error).
+            if len(requests) > 1 and node.operation_data is not None:
+                node.operation_data["multi"] = True
         return requests
 
     def _resolve_operation_result(self, node: Node, raw: Any, step: int) -> tuple[Any, bool]:

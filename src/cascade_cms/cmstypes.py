@@ -8,9 +8,7 @@ from typing import (
     ClassVar,
     Literal,
     NamedTuple,
-    NotRequired,
     Self,
-    TypedDict,
     TypeVar,
     cast,
 )
@@ -198,20 +196,30 @@ def set_checkedout(key: str):
 # ----- PATH TYPES -----
 
 
-class PathBase(TypedDict):
+class PathBase(BaseModel):
     """
     Base class for Path object
 
     Attributes:
         path (str): The path string
-        siteId (uuid_string): unique identifier string
-                              of the site associated with it
-        siteName (str):
+        site_id (uuid): unique identifier of the site associated with it (optional)
+        site_name (str): name of the site associated with it (optional)
     """
 
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+
     path: str
-    siteId: NotRequired[uuid.UUID]
-    siteName: Annotated[str | None, Field(default=None)]
+    site_id: uuid.UUID | None = Field(
+        default=None, validation_alias="siteId", serialization_alias="siteId"
+    )
+    site_name: str | None = Field(
+        default=None, validation_alias="siteName", serialization_alias="siteName"
+    )
+
+    # Cascade rejects dashed UUIDs for identifiers - serialize as bare hex.
+    @field_serializer("site_id")
+    def serialize_site_id(self, value: uuid.UUID | None) -> str | None:
+        return value.hex if value is not None else None
 
 
 class Path(PathBase):
@@ -222,7 +230,20 @@ class Path(PathBase):
         asset_type (AssetTypes): (Required) the type of the asset
     """
 
-    asset_type: Literal[AssetTypes]
+    asset_type: AssetTypes
+
+    # Duck-typed surface shared with IdentifierType (logging reads these).
+    @property
+    def get_id(self) -> None:
+        return None
+
+    @property
+    def get_type(self) -> str:
+        return str(self.asset_type)
+
+    @property
+    def get_path(self) -> str:
+        return self.path
 
 
 # ===== PAYLOAD MODELS (Request Data) =====
@@ -277,7 +298,7 @@ class SimplePayload(BaseModel):
             return value
 
         aliased = {
-            (fields_info[name].alias or name): dump(value)
+            (fields_info[name].serialization_alias or fields_info[name].alias or name): dump(value)
             for name, value in self.__dict__.items()
             if name in fields_info
         }
@@ -296,15 +317,15 @@ class NewAsset(SimplePayload):
     model_config = ConfigDict(
         extra="allow",
         validate_by_name=True,
-        validate_by_alias=False,
+        validate_by_alias=True,
     )
 
     name: str
     asset_type: AssetTypes
-    site_name: str | None = Field(default=None, alias="siteName")
-    site_id: uuid.UUID | None = Field(default=None, alias="siteId")
-    parent_folder_path: str | None = Field(default=None, alias="parentFolderPath")
-    parent_folder_id: uuid.UUID | None = Field(default=None, alias="parentFolderId")
+    site_name: str | None = Field(default=None, validation_alias="siteName", serialization_alias="siteName")
+    site_id: uuid.UUID | None = Field(default=None, validation_alias="siteId", serialization_alias="siteId")
+    parent_folder_path: str | None = Field(default=None, validation_alias="parentFolderPath", serialization_alias="parentFolderPath")
+    parent_folder_id: uuid.UUID | None = Field(default=None, validation_alias="parentFolderId", serialization_alias="parentFolderId")
 
     @field_serializer("site_id", "parent_folder_id")
     def serialize_uuid_as_hex(self, value: uuid.UUID | None) -> str | None:
@@ -350,8 +371,8 @@ class IdentifierType(BaseModel):
         populate_by_name=True,
     )
 
-    identifier: Annotated[uuid.UUID, Field(alias='id')]
-    asset_type: Annotated[AssetTypes, Field(default=..., alias="type")]
+    identifier: Annotated[uuid.UUID, Field(validation_alias='id', serialization_alias='id')]
+    asset_type: Annotated[AssetTypes, Field(default=..., validation_alias="type", serialization_alias="type")]
     recycled: Annotated[bool | None, Field(default=None)] = None
     path: Annotated[PathBase | None, Field(default=None)] = None
 
@@ -364,20 +385,18 @@ class IdentifierType(BaseModel):
     @property
     def get_path(self):
         if self.path is not None:
-            return self.path["path"]
+            return self.path.path
 
     @property
     def get_sitename(self):
         if self.path is not None:
-            return self.path["siteName"]
+            return self.path.site_name
 
     @property
     def get_site_id(self):
-        # siteId is NotRequired (unlike siteName, it has no Field default),
-        # so pydantic may not populate the key at all — plain indexing would
-        # KeyError on that legitimate case.
+        # site_id is optional and defaults to None when the response omits it.
         if self.path is not None:
-            return self.path.get("siteId")
+            return self.path.site_id
 
     @property
     def get_id(self):
@@ -416,9 +435,9 @@ def resolve_identifier(identifier: "IdentifierType | Path") -> tuple[str, ...]:
     """
     if isinstance(identifier, IdentifierType):
         return (str(identifier.get_type), str(identifier.get_id))
-    if identifier.get("siteName") is None:
-        raise ValueError("Path identifiers require siteName to build the request URL")
-    return (str(identifier["asset_type"]), str(identifier["siteName"]), str(identifier["path"]))
+    if identifier.site_name is None:
+        raise ValueError("Path identifiers require site_name to build the request URL")
+    return (str(identifier.asset_type), identifier.site_name, identifier.path)
 
 
 class AssetLogIdentifier(NamedTuple):
@@ -484,7 +503,9 @@ class PageConfiguration(BaseModel):
     )
 
     name: str
-    pageRegions: list[PageRegion]
+    page_regions: list[PageRegion] = Field(
+        validation_alias="pageRegions", serialization_alias="pageRegions"
+    )
 
 
 """
@@ -492,50 +513,68 @@ Used to retrieve the workflow deinitions on assets
 """
 
 
-class WorkflowSettingsModel(TypedDict):
+class WorkflowSettingsModel(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, validate_assignment=True)
+
     identifier: IdentifierType
-    workflowDefinitions: list[IdentifierType]
-    inheritedWorkflowDefinitions: list[IdentifierType]
-    inheritWorkflows: bool
-    requireWorkflow: bool
+    workflow_definitions: list[IdentifierType] = Field(
+        validation_alias="workflowDefinitions", serialization_alias="workflowDefinitions"
+    )
+    inherited_workflow_definitions: list[IdentifierType] = Field(
+        validation_alias="inheritedWorkflowDefinitions", serialization_alias="inheritedWorkflowDefinitions"
+    )
+    inherit_workflows: bool = Field(validation_alias="inheritWorkflows", serialization_alias="inheritWorkflows")
+    require_workflow: bool = Field(validation_alias="requireWorkflow", serialization_alias="requireWorkflow")
 
 
 class workflowSettingsPayload(SimplePayload):
 
-    body: WorkflowSettingsModel = Field(..., alias="workflowSettings")
-    applyInheritWorkflowsToChildren: bool | None = False
-    applyRequireWorkflowToChildren: bool | None = False
+    body: WorkflowSettingsModel = Field(..., validation_alias="workflowSettings", serialization_alias="workflowSettings")
+    apply_inherit_workflows_to_children: bool | None = Field(
+        default=False, validation_alias="applyInheritWorkflowsToChildren", serialization_alias="applyInheritWorkflowsToChildren"
+    )
+    apply_require_workflow_to_children: bool | None = Field(
+        default=False, validation_alias="applyRequireWorkflowToChildren", serialization_alias="applyRequireWorkflowToChildren"
+    )
     # __model__ = WorkflowSettingsModel
 
 
-class Entries(TypedDict):
+class Entries(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, validate_assignment=True)
+
     level: Literal["none", "read", "write"]
-    entry_type: Annotated[IdentityTypes, Field(alias="type")]
+    entry_type: IdentityTypes = Field(validation_alias="type", serialization_alias="type")
     name: str
 
 
-class AccessRightsModel(TypedDict):
-    user_id: Annotated[IdentifierType, Field(alias="identifier")]
-    acl_entries: Annotated[list[Entries], Field(alias="aclEntries")]
-    allLevel: Literal["none", "read", "write"]
+class AccessRightsModel(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, validate_assignment=True)
+
+    user_id: IdentifierType = Field(validation_alias="identifier", serialization_alias="identifier")
+    acl_entries: list[Entries] = Field(validation_alias="aclEntries", serialization_alias="aclEntries")
+    all_level: Literal["none", "read", "write"] = Field(validation_alias="allLevel", serialization_alias="allLevel")
 
 
 class accessRightsInformationPayload(SimplePayload):
-    body: AccessRightsModel = Field(default=..., alias="accessRightsInformation")
-    apply_to_children: bool | None = Field(default=False, alias="applyToChildren")
+    body: AccessRightsModel = Field(default=..., validation_alias="accessRightsInformation", serialization_alias="accessRightsInformation")
+    apply_to_children: bool | None = Field(default=False, validation_alias="applyToChildren", serialization_alias="applyToChildren")
 
 
-class WorkflowAction(TypedDict):
-    action_identifier: Annotated[str, Field(alias="identifier")]
+class WorkflowAction(BaseModel):
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+
+    action_identifier: str = Field(validation_alias="identifier", serialization_alias="identifier")
     label: str
-    action_type: Annotated[str, Field(alias="actionType")]
-    next_id: uuid.UUID
+    action_type: str = Field(validation_alias="actionType", serialization_alias="actionType")
+    next_id: uuid.UUID = Field(validation_alias="nextId", serialization_alias="nextId")
 
 
-class WorkflowSteps(TypedDict):
-    step_identifier: Annotated[str, Field(alias="identifier")]
+class WorkflowSteps(BaseModel):
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+
+    step_identifier: str = Field(validation_alias="identifier", serialization_alias="identifier")
     label: str
-    step_type: Annotated[str, Field(alias="stepType")]
+    step_type: str = Field(validation_alias="stepType", serialization_alias="stepType")
     actions: list[WorkflowAction]
     owner: str | None
 
@@ -546,17 +585,19 @@ class workflowInformation(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    related_entity: Annotated[IdentifierType, Field(alias="relatedEntity")]
-    current_step: Annotated[str, Field(alias="currentStep")]
+    related_entity: Annotated[IdentifierType, Field(validation_alias="relatedEntity", serialization_alias="relatedEntity")]
+    current_step: Annotated[str, Field(validation_alias="currentStep", serialization_alias="currentStep")]
     ordered_steps: list[WorkflowSteps]
     unordered_steps: list[WorkflowSteps]
     start_date: datetime
     end_date: datetime
     name: str
-    workflow_info_id: Annotated[uuid.UUID, Field(alias="workflowInfoId")]
+    workflow_info_id: Annotated[uuid.UUID, Field(validation_alias="workflowInfoId", serialization_alias="workflowInfoId")]
 
 
-class Audit(TypedDict):
+class Audit(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     user: str
     action: AuditTypes
     identifier: IdentifierType
@@ -726,7 +767,7 @@ class Asset:
             return config
 
         try:
-            region = next((r for r in config.pageRegions if r.name == page_region), None)
+            region = next((r for r in config.page_regions if r.name == page_region), None)
         except (KeyError, AttributeError) as e:
             raise KeyError(f"Missing required field 'pageRegions' or 'name' in PageRegion: {e}")
 
@@ -761,12 +802,12 @@ class Message(SimplePayload):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    m_from: Annotated[str, Field(alias="from", exclude=True)]
-    m_to: Annotated[str, Field(alias="to", exclude=True)]
-    m_subject: Annotated[str, Field(alias="subject", exclude=True)]
-    m_date: Annotated[datetime, Field(alias="date", exclude=True)]
-    m_id: Annotated[uuid.UUID, Field(alias="id", exclude=True)]
-    marked: str = Field("unread", alias="markType")
+    m_from: Annotated[str, Field(validation_alias="from", serialization_alias="from", exclude=True)]
+    m_to: Annotated[str, Field(validation_alias="to", serialization_alias="to", exclude=True)]
+    m_subject: Annotated[str, Field(validation_alias="subject", serialization_alias="subject", exclude=True)]
+    m_date: Annotated[datetime, Field(validation_alias="date", serialization_alias="date", exclude=True)]
+    m_id: Annotated[uuid.UUID, Field(validation_alias="id", serialization_alias="id", exclude=True)]
+    marked: str = Field("unread", validation_alias="markType", serialization_alias="markType")
 
     @field_validator("m_date", mode="after")
     @classmethod
@@ -782,7 +823,7 @@ class CheckedOutAsset(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    workingCopyIdentifier: IdentifierType
+    working_copy_identifier: IdentifierType = Field(validation_alias="workingCopyIdentifier", serialization_alias="workingCopyIdentifier")
 
 
 class ListElements(BaseModel):
@@ -798,6 +839,7 @@ class ListElements(BaseModel):
             "messages",
             "relationships",
             "sites",
+            "audits",
         )
     )
 
@@ -827,12 +869,14 @@ class CascadeSuccess(BaseModel):
 class SearchInformation(SimplePayload):
     """Payload for the `search` operation."""
 
-    siteName: str
-    searchTerms: str
-    searchFields: list[FieldsSearchTypes] | list[Literal[""]] = Field(
+    site_name: str = Field(validation_alias="siteName", serialization_alias="siteName")
+    search_terms: str = Field(validation_alias="searchTerms", serialization_alias="searchTerms")
+    search_fields: list[FieldsSearchTypes] | list[Literal[""]] = Field(
+        validation_alias="searchFields", serialization_alias="searchFields",
         default_factory=lambda: [cast(Literal[""], "")]
     )
-    searchTypes: list[AssetTypes] | list[Literal[""]] = Field(
+    search_types: list[AssetTypes] | list[Literal[""]] = Field(
+        validation_alias="searchTypes", serialization_alias="searchTypes",
         default_factory=lambda: [cast(Literal[""], "")]
     )
 
@@ -847,18 +891,18 @@ class preference(SimplePayload):
 class deleteParameters(SimplePayload):
     """Payload for the `delete` operation."""
 
-    do_workflow: bool = Field(alias="doWorkflow")
-    destinations_identifiers: list[IdentifierType] = Field(alias="destinations")
+    do_workflow: bool = Field(validation_alias="doWorkflow", serialization_alias="doWorkflow")
+    destinations_identifiers: list[IdentifierType] = Field(validation_alias="destinations", serialization_alias="destinations")
     unpublish: bool = True
 
 
 class copyParameters(SimplePayload):
     """Payload for the `copy` operation."""
 
-    do_workflow: Annotated[bool, Field(alias="doWorkflow")]
-    new_name: Annotated[str, Field(default=..., alias="newName")]
+    do_workflow: Annotated[bool, Field(validation_alias="doWorkflow", serialization_alias="doWorkflow")]
+    new_name: Annotated[str, Field(default=..., validation_alias="newName", serialization_alias="newName")]
     destination_container_identifier: Annotated[
-        IdentifierType, Field(alias="destinationContainerIdentifier")  # required
+        IdentifierType, Field(validation_alias="destinationContainerIdentifier", serialization_alias="destinationContainerIdentifier")  # required
     ]
 
 
@@ -866,11 +910,11 @@ class moveParameters(SimplePayload):
     """Payload for the `move` operation."""
 
     destinations: list[IdentifierType]
-    do_workflow: bool = Field(alias="doWorkflow")
+    do_workflow: bool = Field(validation_alias="doWorkflow", serialization_alias="doWorkflow")
     destination_container_identifier: IdentifierType = Field(
-        alias="destinationContainerIdentifier"
+        validation_alias="destinationContainerIdentifier", serialization_alias="destinationContainerIdentifier"
     )
-    new_name: str = Field(default="", alias="newName")  # empty new name means no rename
+    new_name: str = Field(default="", validation_alias="newName", serialization_alias="newName")  # empty new name means no rename
     unpublish: bool = True
 
 
@@ -889,36 +933,34 @@ class Comment(SimplePayload):
 class SiteCopyParameter(SimplePayload):
     """Payload for the `siteCopy` operation."""
 
-    original_sitename: str | IdentifierType = Field(alias="originalSiteName")
-    new_sitename: str = Field(alias="newSiteName")
+    original_sitename: str | IdentifierType = Field(validation_alias="originalSiteName", serialization_alias="originalSiteName")
+    new_sitename: str = Field(validation_alias="newSiteName", serialization_alias="newSiteName")
 
 
 class workflowTransitionInformation(SimplePayload):
     """Payload for the `performWorkflowTransition` operation."""
 
-    workflow_identifier: Annotated[uuid.UUID, Field(alias="workflowId")]
-    action_identifier: Annotated[str, Field(alias="actionIdentifier")]
-    transition_comment: str | None = Field(alias="transitionComment")
+    workflow_identifier: Annotated[uuid.UUID, Field(validation_alias="workflowId", serialization_alias="workflowId")]
+    action_identifier: Annotated[str, Field(validation_alias="actionIdentifier", serialization_alias="actionIdentifier")]
+    transition_comment: str | None = Field(validation_alias="transitionComment", serialization_alias="transitionComment")
 
 
 class auditParameters(SimplePayload):
     """Payload for the `readAudits` operation."""
 
-    auditType: AuditTypes
-    by_identifier: IdentifierType = Field(alias="identifier")
-    by_username: str | None = Field(default=None, alias="username")
-    by_group: str | None = Field(default=None, alias="groupname")
-    by_role: str | None = Field(default=None, alias="rolename")
-    startDate: datetime | None = Field(default=None)
-    endDate: datetime | None = Field(default=None)
+    audit_type: AuditTypes = Field(validation_alias="auditType", serialization_alias="auditType")
+    by_username: str | None = Field(default=None, validation_alias="username", serialization_alias="username")
+    by_group: str | None = Field(default=None, validation_alias="groupname", serialization_alias="groupname")
+    by_role: str | None = Field(default=None, validation_alias="rolename", serialization_alias="rolename")
+    start_date: datetime | None = Field(default=None, validation_alias="startDate", serialization_alias="startDate")
+    end_date: datetime | None = Field(default=None, validation_alias="endDate", serialization_alias="endDate")
 
-    # make sure its only user, group, role
-    @field_validator("by_identifier", mode="after")
-    @classmethod
-    def is_admin_entity(cls, identifier: IdentifierType) -> IdentifierType:
-        if identifier.get_type not in {"user", "role", "group"}:
-            raise ValueError("Identifier needs to be either user, role, or group.")
-        return identifier
+    # Cascade needs at least one of username / groupname / rolename
+    @model_validator(mode="after")
+    def requires_username_group_or_role(self) -> Self:
+        if not (self.by_username or self.by_group or self.by_role):
+            raise ValueError("Provide at least one of username, groupname, or rolename.")
+        return self
 
     """
     def toJson(self) -> str:

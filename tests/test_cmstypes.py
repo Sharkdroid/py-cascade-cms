@@ -232,3 +232,135 @@ def test_asset_root_container_id_known_and_unknown_types():
     )
     assert site.root_container_id("sharedfield") is None
     assert site.root_container_id("template") is None
+
+
+def test_audit_parameters_accept_plain_strings():
+    from cascade_cms.cmstypes import auditParameters
+
+    for kw, key in (("username", "username"), ("groupname", "groupname"), ("rolename", "rolename")):
+        params = auditParameters(audit_type="login", **{kw: "x"})
+        assert params.model_dump(by_alias=True)["auditParameters"][key] == "x"
+
+
+def test_audit_parameters_require_a_name():
+    import pytest
+    from pydantic import ValidationError
+
+    from cascade_cms.cmstypes import auditParameters
+
+    with pytest.raises(ValidationError):
+        auditParameters(audit_type="login")
+
+
+def test_new_asset_accepts_snake_and_camel_and_serializes_camel():
+    import json
+
+    from cascade_cms.cmstypes import NewAsset
+
+    sid = "8b320f55ac1001062545a6d2562cee4b"
+    snake = NewAsset(name="n", asset_type="page", site_id=sid, parent_folder_path="/")
+    camel = NewAsset(name="n", asset_type="page", siteId=sid, parentFolderPath="/")
+    for asset in (snake, camel):
+        body = json.loads(asset.dump_json())["asset"]["page"]
+        assert body["siteId"] == sid
+        assert body["parentFolderPath"] == "/"
+        assert "site_id" not in body
+
+
+def test_search_information_snake_fields_serialize_camel():
+    from cascade_cms.cmstypes import SearchInformation
+
+    dumped = SearchInformation(site_name="s", search_terms="t").model_dump(by_alias=True)
+    body = dumped["searchInformation"]
+    assert body["siteName"] == "s" and body["searchTerms"] == "t"
+
+
+def test_path_accepts_snake_and_camel_and_stays_hashable():
+    from cascade_cms.cmstypes import Path as CascadePath
+
+    camel = CascadePath(path="/a", siteName="s", asset_type="page")
+    snake = CascadePath(path="/a", site_name="s", asset_type="page")
+    assert camel == snake and hash(camel) == hash(snake)
+    assert camel.get_type == "page" and camel.get_id is None
+
+
+def test_identifier_type_nested_path_is_model():
+    ident = IdentifierType(
+        id="8b320f55ac1001062545a6d2562cee4b",
+        type="page",
+        path={"path": "a/b", "siteName": "s", "siteId": "9c431066bd21120736f6b7e3673dff5c"},
+    )
+    assert ident.get_path == "a/b" and ident.get_sitename == "s"
+    dumped = ident.model_dump(by_alias=True)["path"]
+    assert dumped["siteName"] == "s"
+    assert dumped["siteId"] == "9c431066bd21120736f6b7e3673dff5c"
+
+
+def test_workflow_settings_payload_roundtrip():
+    from cascade_cms.cmstypes import workflowSettingsPayload
+
+    ident = {"id": "8b320f55ac1001062545a6d2562cee4b", "type": "folder"}
+    payload = workflowSettingsPayload.model_validate(
+        {
+            "workflowSettings": {
+                "identifier": ident,
+                "workflowDefinitions": [],
+                "inheritedWorkflowDefinitions": [],
+                "inheritWorkflows": True,
+                "requireWorkflow": False,
+            },
+            "applyInheritWorkflowsToChildren": True,
+        }
+    )
+    assert payload.body.identifier.get_type == "folder"
+    assert payload.body.inherit_workflows is True
+    body = payload.model_dump(by_alias=True)["workflowSettingsPayload"]
+    assert body["workflowSettings"]["inheritWorkflows"] is True
+    assert body["applyInheritWorkflowsToChildren"] is True
+
+
+def test_access_rights_and_audit_models_validate():
+    from cascade_cms.cmstypes import AccessRightsModel, Audit
+
+    rights = AccessRightsModel.model_validate(
+        {
+            "identifier": {"id": "8b320f55ac1001062545a6d2562cee4b", "type": "user"},
+            "aclEntries": [{"level": "read", "type": "group", "name": "g"}],
+            "allLevel": "none",
+        }
+    )
+    assert rights.acl_entries[0].entry_type == "group" and rights.all_level == "none"
+    audit = Audit.model_validate(
+        {
+            "user": "u",
+            "action": "login",
+            "identifier": {"id": "8b320f55ac1001062545a6d2562cee4b", "type": "user"},
+            "date": "2026-01-01T00:00:00Z",
+        }
+    )
+    assert audit.user == "u"
+
+
+def test_list_elements_accepts_audits_key():
+    from cascade_cms.cmstypes import Audit
+
+    ident = {"id": "8b320f55ac1001062545a6d2562cee4b", "type": "user"}
+    result = ListElements.model_validate(
+        {
+            "audits": [
+                {"user": "u", "action": "login", "identifier": ident, "date": "2026-01-01T00:00:00Z"}
+            ]
+        }
+    )
+    assert isinstance(result.elements[0], Audit)
+
+
+def test_workflow_action_next_id_alias():
+    from cascade_cms.cmstypes import WorkflowAction
+
+    nid = "9c431066bd21120736f6b7e3673dff5c"
+    for key in ("nextId", "next_id"):
+        action = WorkflowAction.model_validate(
+            {"identifier": "a", "label": "l", "actionType": "t", key: nid}
+        )
+        assert action.next_id.hex == nid

@@ -84,7 +84,7 @@ class ChainResults[T](list[T]):
     broken out.
 
     Indexing, iteration, and `len()` behave exactly like a plain list —
-    `.ok` and `.failed` are added properties computed from the failure
+    `.success` and `.failed` are added properties computed from the failure
     record recorded for each chain at execution time.
     """
 
@@ -97,7 +97,7 @@ class ChainResults[T](list[T]):
         self._failures: list[ChainFailure | None] = list(failures or [])
 
     @property
-    def ok(self) -> list[T]:
+    def success(self) -> list[T]:
         """Results from chains that did not fail, typed from `result_type`."""
         return [
             result

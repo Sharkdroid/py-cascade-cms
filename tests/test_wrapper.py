@@ -115,13 +115,13 @@ class TestChainResults:
             message="nope",
         )
         results = ChainResults(["good", failure.error], [None, failure])
-        assert results.ok == ["good"]
+        assert results.success == ["good"]
         assert results.failed == [failure]
 
     def test_empty_results(self):
         results = ChainResults()
         assert list(results) == []
-        assert results.ok == []
+        assert results.success == []
         assert results.failed == []
 
 
@@ -181,7 +181,7 @@ class TestSubmitRequestsChainResults:
 
         assert isinstance(results, ChainResults)
         assert len(results) == 2
-        assert results.ok == [asset1]
+        assert results.success == [asset1]
         assert len(results.failed) == 1
         assert results.failed[0].category == FailureCategory.CASCADE
 
@@ -206,7 +206,7 @@ class TestSubmitRequestsChainResults:
 
     def test_other_chains_finish_before_callback_exception_is_raised(self):
         """Chain 1's callback raises; chain 2 has no callback and should
-        still complete and land in `.ok` — a callback exception stops only
+        still complete and land in `.success` — a callback exception stops only
         its own chain."""
         driver = StubDriver([[make_asset(id=ID_ONE)], [make_asset(id=ID_TWO)]])
         wrapper = make_wrapper(driver)
@@ -222,8 +222,8 @@ class TestSubmitRequestsChainResults:
         finally:
             driver.eventLoop.close()
 
-        assert len(results.ok) == 1
-        assert results.ok[0].get("id") == ID_TWO
+        assert len(results.success) == 1
+        assert results.success[0].get("id") == ID_TWO
         assert len(results.failed) == 1
         assert results.failed[0].category == FailureCategory.CALLBACK
 
