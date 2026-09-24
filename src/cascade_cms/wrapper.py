@@ -13,8 +13,9 @@ from .failures import (
     FailureCategory,
     classify_failure,
 )
-from .operation_logger import OperationLogger
 from .operations import OperationChain, Operations
+from .utils.operation_logger import OperationLogger
+from .utils.script_notes import ActiveRun, activate, deactivate
 
 T = TypeVar("T")
 
@@ -50,6 +51,10 @@ class CascadeWrapperBase:
     """
 
     def __enter__(self):
+        # Route `script_log.note()` to this run for the life of the block.
+        self._run_token = activate(
+            ActiveRun(self._logger, getattr(self, "_api_key", ""))
+        )
         return self
 
     def __init__(
@@ -80,6 +85,7 @@ class CascadeWrapperBase:
                 parameter wins.
         """
         self._exit_on_failure = exit_on_failure
+        self._api_key = environmentVariables["API_KEY"]
         # Cumulative across every submit_requests() call in this `with`
         # block, in chain-creation order, so the deferred raise at
         # __exit__ works across multiple batches (D8, acceptance #9).
@@ -121,6 +127,11 @@ class CascadeWrapperBase:
           - No failures: return normally.
         Code after the `with` block does not run when this raises.
         """
+        token = getattr(self, "_run_token", None)
+        if token is not None:
+            self._run_token = None
+            deactivate(token)
+
         try:
             self._logger.log_exit()
             self._driver.close()

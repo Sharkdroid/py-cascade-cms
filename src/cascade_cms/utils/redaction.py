@@ -1,7 +1,7 @@
 """Credential masking for anything that could surface the API bearer token.
 
 Not re-exported from `cascade_cms/__init__.py` (deliberate — import from
-`cascade_cms.redaction` directly), consistent with `failures.py`.
+`cascade_cms.utils.redaction` directly), consistent with `failures.py`.
 """
 
 

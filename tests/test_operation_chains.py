@@ -22,8 +22,8 @@ from cascade_cms.cmstypes import (
     edit_log_identifier_from_asset,
 )
 from cascade_cms.driver import CascadeCMSRestDriver
-from cascade_cms.operation_logger import OperationLogger
 from cascade_cms.operations import ChainGroup, Node, OperationChain, Operations
+from cascade_cms.utils.operation_logger import OperationLogger
 
 ID_ONE = "8b320f55ac1001062545a6d2562cee4b"
 ID_TWO = "9c431066bd21120736f6b7e3673dff5c"

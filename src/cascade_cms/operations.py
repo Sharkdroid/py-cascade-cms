@@ -1,8 +1,9 @@
 import asyncio
+import contextvars
 import os
 import traceback
 from collections.abc import Callable
-from concurrent.futures import Executor
+from concurrent.futures import Executor, ProcessPoolExecutor
 from dataclasses import dataclass, field
 from functools import partial
 from typing import Any, Literal, Self
@@ -45,7 +46,97 @@ from .cmstypes import (
 )
 from .driver import CascadeCMSRestDriver, RequestExecutor
 from .failures import ChainFailure, FailureCategory, classify_failure
-from .operation_logger import ChainLineBuilder, OperationLogger
+from .utils.operation_logger import ChainLineBuilder, OperationLogger
+
+
+def _in_current_context(executor: Executor | None, fn: Callable[[Any], Any]) -> Callable[[Any], Any]:
+    """Wrap `fn` to run in a copy of the caller's context (thread pools).
+
+    Neither `run_in_executor` nor `Executor.submit` copies contextvars, so
+    without this a thread-pool callback would not see the active run and
+    `script_log.note()` would have nowhere to write. A process pool runs in
+    another process with no active run and cannot pickle a `Context`, so
+    `fn` goes through unchanged there.
+    """
+    if isinstance(executor, ProcessPoolExecutor):
+        return fn
+    ctx = contextvars.copy_context()
+
+    def run_in_context(previous: Any) -> Any:
+        return ctx.run(fn, previous)
+
+    return run_in_context
+
+
+# Operations that change Cascade state: each successful one writes a
+# `[RESULT]` line to the logfile. Reads, searches and lists write none.
+WRITE_OPERATIONS = frozenset(
+    {
+        "create",
+        "edit",
+        "delete",
+        "copy",
+        "move",
+        "publish",
+        "checkIn",
+        "checkOut",
+        "siteCopy",
+        "editAccessRights",
+        "editWorkflowSettings",
+        "performWorkflowTransition",
+        "markMessage",
+        "deleteMessage",
+        "editPreference",
+    }
+)
+
+
+def _target_fields(target: Any) -> list[str]:
+    """`[type, id, path]` tokens (each only when known) for a target.
+
+    `id` is 32 hex characters and `path` starts with `/`, so the tokens
+    are unambiguous by shape. `target` may be an `IdentifierType`, a
+    `Path`, or an `AssetLogIdentifier`; anything else yields no tokens.
+    """
+    if target is None:
+        return []
+    fields: list[str] = []
+    if isinstance(target, AssetLogIdentifier):
+        return [str(target.raw_type), target.id.hex]
+    asset_type = getattr(target, "get_type", None)
+    if asset_type:
+        fields.append(str(asset_type))
+    asset_id = getattr(target, "get_id", None)
+    if asset_id:
+        fields.append(str(asset_id))
+    path = getattr(target, "get_path", None)
+    if path:
+        fields.append(str(path))
+    return fields
+
+
+def result_line(operation: str, request: RequestExecutor, result: Any) -> str:
+    """Build the text after `[RESULT]: ` for one successful write.
+
+    - `create`: `create <type> <id> [<path>]`, from what Cascade returned
+      (the new `IdentifierType`); `<path>` is the new asset's site-relative
+      path, known when the payload gave `parent_folder_path`.
+    - every other write: `<operation> [<type> <id> <path>] succeeded`,
+      naming the target (as many of the three as are known) — or just
+      `<operation> succeeded` when the operation has no identifier target.
+    """
+    if operation == "create":
+        fields = _target_fields(result)
+        payload = request.payload
+        parent = getattr(payload, "parent_folder_path", None)
+        name = getattr(payload, "name", None)
+        if parent is not None and name and not any(f.startswith("/") for f in fields):
+            fields.append(f"{parent.rstrip('/')}/{name}")
+        return " ".join([operation, *fields])
+    target = request.identifier
+    if target is None:
+        target = getattr(request.payload, "identifier", None)
+    return " ".join([operation, *_target_fields(target), "succeeded"])
 
 NodeType = Literal["operation", "callback"]
 HTTPMethod = Literal["GET", "POST", "PUT"]
@@ -112,6 +203,7 @@ class OperationChain:
     _index: int = 0
     _line: ChainLineBuilder = field(default_factory=ChainLineBuilder)
     failure: ChainFailure | None = None
+    _result_lines: list[str] = field(default_factory=list)
 
     # ------------------------------------------------------------------ #
     # Chain building                                                       #
@@ -772,7 +864,7 @@ class OperationChain:
         if asyncio.iscoroutinefunction(fn):
             value = driver.eventLoop.run_until_complete(fn(previous))
         elif executor is not None:
-            value = executor.submit(fn, previous).result()
+            value = executor.submit(_in_current_context(executor, fn), previous).result()
         else:
             value = fn(previous)
         # A callback that returns nothing is a side effect: keep the input.
@@ -792,7 +884,9 @@ class OperationChain:
         else:
             # Sync callbacks run off the event loop so they cannot block it.
             loop = asyncio.get_running_loop()
-            value = await loop.run_in_executor(executor, fn, previous)
+            value = await loop.run_in_executor(
+                executor, _in_current_context(executor, fn), previous
+            )
         return previous if value is None else value
 
     def _start_line_if_needed(self) -> None:
@@ -897,6 +991,7 @@ class OperationChain:
                 value, stop = self._resolve_operation_result(node, raw, step)
                 if stop:
                     return self._stopped(step, value, node)
+                self._collect_results(node, requests, raw)
                 last_node_was_operation = True
             else:
                 try:
@@ -920,6 +1015,7 @@ class OperationChain:
             self._line.append_step(type(result).__name__)
         if self._logger:
             self._logger.flush_chain(self._line)
+            self._flush_results()
         return result
 
     async def execute_async(self, executor: Executor | None = None) -> Any:
@@ -961,6 +1057,7 @@ class OperationChain:
                 value, stop = self._resolve_operation_result(node, raw, step)
                 if stop:
                     return self._stopped(step, value, node)
+                self._collect_results(node, requests, raw)
                 last_node_was_operation = True
             else:
                 try:
@@ -979,7 +1076,36 @@ class OperationChain:
             self._line.append_step(type(result).__name__)
         if self._logger:
             self._logger.flush_chain(self._line)
+            self._flush_results()
         return result
+
+    def _collect_results(self, node: Node, requests: list[RequestExecutor], raw: Any) -> None:
+        """Queue a `[RESULT]` line per successful request of a write node.
+
+        `raw` lines up one-for-one with `requests`; a failed item (a
+        `CascadeError` or exception) is skipped — it already surfaces as an
+        error — so a partly failed list create/edit yields lines for the
+        items that succeeded only. Reads write nothing.
+        """
+        operation = node.operation_type
+        if operation not in WRITE_OPERATIONS:
+            return
+        results = list(raw) if isinstance(raw, list) else [raw]
+        for request, result in zip(requests, results, strict=False):
+            if isinstance(result, CascadeError | Exception):
+                continue
+            self._result_lines.append(result_line(operation, request, result))
+
+    def _flush_results(self) -> None:
+        """Write the queued `[RESULT]` lines, after the chain's own line.
+
+        Emitted for a chain that failed later too: a write that succeeded
+        stays on record even when a later step stopped the chain.
+        """
+        if self._logger:
+            for line in self._result_lines:
+                self._logger.log_result(line)
+        self._result_lines.clear()
 
     def _stopped(self, step: int, error: Any, node: Node) -> Any:
         """Record the chain's `ChainFailure`, flush the chain's line plus
@@ -998,6 +1124,7 @@ class OperationChain:
             self._logger.flush_chain_error(
                 self._line, step - 1, failure.message, file, line, failure.category
             )
+            self._flush_results()
         return error
 
 

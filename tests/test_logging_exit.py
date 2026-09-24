@@ -12,7 +12,7 @@ from test_wrapper import ID_ONE, StubDriver, make_asset, make_wrapper
 
 from cascade_cms.cmstypes import CascadeError, IdentifierType
 from cascade_cms.failures import CascadeBatchError
-from cascade_cms.operation_logger import OperationLogger
+from cascade_cms.utils.operation_logger import OperationLogger
 
 
 def _logger(tmp_path):
@@ -179,7 +179,7 @@ def test_stdout_empty_for_normal_run():
         """
         from tests.test_wrapper import StubDriver, make_wrapper, make_asset
         from cascade_cms.cmstypes import IdentifierType
-        from cascade_cms.operation_logger import OperationLogger
+        from cascade_cms.utils.operation_logger import OperationLogger
         import tempfile, os
         os.chdir(tempfile.mkdtemp())
         driver = StubDriver([[make_asset(id="8b320f55ac1001062545a6d2562cee4b")]])

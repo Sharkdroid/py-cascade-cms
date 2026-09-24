@@ -10,7 +10,7 @@ import json
 
 from cascade_cms.cmstypes import IdentifierType
 from cascade_cms.cmstypes import Path as CascadePath
-from cascade_cms.operation_logger import ChainLineBuilder, OperationLogger
+from cascade_cms.utils.operation_logger import ChainLineBuilder, OperationLogger
 
 ID_ONE = "8b320f55ac1001062545a6d2562cee4b"
 

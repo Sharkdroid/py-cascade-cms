@@ -144,6 +144,47 @@ with CascadeWrapperBase(environment_variables, debug=debug_config) as cascade:
     ...
 ```
 
+#### `[RESULT]` and `[NOTE]` lines
+
+Two fixed line types make the logfile carry what a script *did*, so an agent (or you) can read it
+instead of capturing stdout:
+
+- **`[RESULT]: ...`** is written **automatically**, once per successful write operation
+  (`create`, `edit`, `delete`, `copy`, `move`, `publish`, `checkIn`, `checkOut`, `siteCopy`,
+  `editAccessRights`, `editWorkflowSettings`, `performWorkflowTransition`, `markMessage`,
+  `deleteMessage`, `editPreference`), right after that chain's pipeline line. Reads, searches and
+  lists write none; failed writes and failed items of a list create/edit write none. A write that
+  succeeded stays on record even if a later step of its chain failed.
+
+  ```
+  [RESULT]: create page 5f1a0000000000000000000000c90d00 /_dev/testing/testbed2-copy
+  [RESULT]: delete page 1a2b0000000000000000000000009f00 succeeded
+  [RESULT]: siteCopy succeeded
+  ```
+
+  `create` lines are `create <type> <id> [<path>]` (the new asset, as Cascade returned it; `<path>`
+  is the site-relative path when the payload gave `parent_folder_path`). Every other write is
+  `<operation> [<type> <id> <path>] succeeded`, naming the target (as many of the three as are
+  known); an operation with no identifier target is just `<operation> succeeded`. `<id>` is 32
+  hex characters and `<path>` starts with `/`.
+
+- **`[NOTE]: <text>`** is written **on purpose** by your script:
+
+  ```python
+  from cascade_cms.utils import script_log
+
+  with CascadeWrapperBase(environment_variables) as cascade:
+      script_log.note("will delete page 1a2b... /news/old-1")
+  ```
+
+  `script_log` is a stateless singleton that routes each note to the run whose `with` block is
+  active in the calling context, so wrappers open on different threads never mix notes. Notes must
+  be written **inside** the `with` block; outside it the note is dropped and a `RuntimeWarning` is
+  emitted. Newlines become spaces (one note = one line) and any occurrence of the API key is
+  masked. Thread-pool and async callbacks may call `note()` directly. **Process-pool callbacks
+  cannot** (another process, no active run): have them return values and note them in the main
+  script.
+
 All keys are required in debug mode — there are no inferred defaults, so you always know what
 you opted into.
 

@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.4.0]
+
+### Added
+- **`[RESULT]` lines:** each successful write operation now writes one line to the logfile, after its chain's pipeline line, naming what Cascade returned (`create` → new type, id and path; other writes → operation, target and `succeeded`). Reads and failed writes write none. See the README for the exact format.
+- **`script_log.note(text)`** (`from cascade_cms.utils import script_log`): writes `[NOTE]: <text>` to the active run's logfile. A stateless singleton routed through a `ContextVar` set by `CascadeWrapperBase`'s `with` block, so concurrent wrappers on different threads keep their notes separate. Called outside a run it drops the note and emits a `RuntimeWarning`. API keys in the text are masked.
+- `cascade_cms/utils/` package.
+
+### Changed
+- **BREAKING: `cascade_cms.operation_logger` moved to `cascade_cms.utils.operation_logger`**, with no shim at the old path. `from cascade_cms import OperationLogger` still works.
+- **BREAKING: `cascade_cms.redaction` (new in 3.3.0) moved to `cascade_cms.utils.redaction`**, also with no shim.
+- Sync callbacks run in a thread pool now execute in a copy of the caller's context (neither `run_in_executor` nor `Executor.submit` copies it), so `script_log.note()` works from them. Process-pool callbacks are unchanged and cannot call `note()`.
+
+**Files changed:** `src/cascade_cms/utils/` (added: `__init__.py`, `script_notes.py`; moved: `operation_logger.py`, `redaction.py`), `src/cascade_cms/operations.py`, `src/cascade_cms/wrapper.py`, `src/cascade_cms/driver.py`, `src/cascade_cms/__init__.py`, `pyproject.toml`, `README.md`, `AGENTS.md`, `tests/test_result_lines.py` (added), `tests/test_script_log.py` (added), `tests/test_logging_exit.py`, `tests/test_operation_chains.py`, `tests/test_operation_logger.py`, `tests/test_redaction.py`, `tests/test_wrapper.py`
+
 ## [3.3.0]
 
 ### Removed

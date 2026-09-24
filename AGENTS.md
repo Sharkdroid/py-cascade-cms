@@ -37,7 +37,14 @@ here needs to stay in sync with them beyond tagging a release.
   `[LOG]` path, not by capturing console output.
 - `log_dir` (explicit parameter) beats a debug config's `log_dir`; default `./logs`. Log
   filenames are `{SERVER}[_debug]_{timestamp}_{n}.log`.
-- The API bearer token is masked (`cascade_cms.redaction.mask_token`) wherever it could surface.
+- Successful writes log `[RESULT]: ...` automatically; scripts log `[NOTE]: <text>` with
+  `from cascade_cms.utils import script_log` then `script_log.note(text)` inside the `with`
+  block (formats in the README). Process-pool callbacks return values and the main script notes
+  them.
+- Package layout: `cascade_cms/utils/` holds `operation_logger.py`, `redaction.py` and
+  `script_notes.py`. `cascade_cms.operation_logger` and `cascade_cms.redaction` no longer exist
+  (no shim); `from cascade_cms import OperationLogger` still works.
+- The API bearer token is masked (`cascade_cms.utils.redaction.mask_token`) wherever it could surface.
 
 ## Maintaining the CHANGELOG
 

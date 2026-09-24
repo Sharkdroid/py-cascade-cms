@@ -12,7 +12,7 @@ from .cmstypes import (
     ResponseParser,
     serialize_payload,
 )
-from .operation_logger import OperationLogger
+from .utils.operation_logger import OperationLogger
 
 T = TypeVar("T")
 

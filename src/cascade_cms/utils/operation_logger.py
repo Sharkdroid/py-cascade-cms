@@ -1,4 +1,4 @@
-# operation_logger.py
+# utils/operation_logger.py
 """Owns all console, logfile, and (verbose mode) request/response file output
 for the cascade_cms library.
 
@@ -40,7 +40,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from .failures import FailureCategory
+from ..failures import FailureCategory
 from .redaction import mask_token
 
 _CATEGORY_PREFIX = {
@@ -357,6 +357,18 @@ class OperationLogger:
         )
         self._write(v_line)
         self._write(error_block)
+
+    def log_result(self, line: str) -> None:
+        """Write one `[RESULT]: <line>` for a successful write operation.
+
+        Written in normal and debug mode, after the chain's own pipeline
+        line (and its `!ERROR:` block, if the chain failed later).
+        """
+        self._write(f"[RESULT]: {line}")
+
+    def log_note(self, text: str) -> None:
+        """Write one script-authored `[NOTE]: <text>` line (see `script_log`)."""
+        self._write(f"[NOTE]: {text}")
 
     # ------------------------------------------------------------------ #
     # Request/response detail (verbose mode)                              #
