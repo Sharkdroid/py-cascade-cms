@@ -6,7 +6,13 @@ from typing import Any, TypedDict, TypeVar, overload
 
 from .cmstypes import CascadeObjects
 from .driver import CascadeCMSRestDriver
-from .failures import CascadeBatchError, ChainFailure, ChainResults, FailureCategory
+from .failures import (
+    CascadeBatchError,
+    ChainFailure,
+    ChainResults,
+    FailureCategory,
+    classify_failure,
+)
 from .operation_logger import OperationLogger
 from .operations import OperationChain, Operations
 
@@ -37,7 +43,7 @@ class CascadeWrapperBase:
     stay available to the caller as values via `.success`/`.failed`.
 
     Use as:
-        with CascadeWrapperBase(env_vars, config_vars) as cascade:
+        with CascadeWrapperBase(env_vars) as cascade:
             cascade.operations.read(identifier)
             results = cascade.submit_requests()
             # results.success / results.failed — no isinstance() checks needed.
@@ -49,9 +55,10 @@ class CascadeWrapperBase:
     def __init__(
         self,
         environmentVariables: EnvironmentVars,
-        configurationVariables: dict[str, Any] | None,
         debug: dict[str, Any] | None = None,
+        *,
         exit_on_failure: bool = True,
+        log_dir: str | os.PathLike | None = None,
     ):
         """Initialize the logger, driver, and operations builder.
 
@@ -59,8 +66,6 @@ class CascadeWrapperBase:
             environmentVariables: Must contain "SERVER" (label used in log
                 output), "API_KEY" (Cascade bearer token), and
                 "CASCADE_URL" (base URL of the Cascade instance).
-            configurationVariables: kwargs forwarded to the driver's cache
-                backend (`SQLiteBackend`); pass an empty dict for defaults.
             debug: Optional debug config for `OperationLogger` (verbose
                 nested logging); None enables normal/minimal logging.
             exit_on_failure: When True (default), `__exit__` ends the script
@@ -68,6 +73,11 @@ class CascadeWrapperBase:
                 embed this wrapper in a longer-lived process (e.g. an MCP
                 server) where `SystemExit` must never escape — cleanup and
                 the tally still run, but `__exit__` never raises.
+            log_dir: Directory for this run's logfile (and, in debug mode,
+                its request/response JSON files). Created if missing. None
+                keeps the default, `./logs`. Applies in normal and debug
+                mode; if the debug config also sets `log_dir`, this
+                parameter wins.
         """
         self._exit_on_failure = exit_on_failure
         # Cumulative across every submit_requests() call in this `with`
@@ -79,11 +89,11 @@ class CascadeWrapperBase:
         self._logger = OperationLogger(
             server=environmentVariables["SERVER"],
             debug_config=debug,
+            log_dir=log_dir,
         )
         self._driver = CascadeCMSRestDriver(
             environmentVariables['API_KEY'],
             environmentVariables['CASCADE_URL'],
-            configurationVariables,
             logger=self._logger,
         )
         self.operations = Operations(self._driver, _logger=self._logger)
@@ -117,25 +127,45 @@ class CascadeWrapperBase:
         except Exception as e:  # noqa: BLE001 - log cleanup failure without masking the original exception
             self._logger.log_python_error(e)
 
+        # Decide the outcome first so the logfile records it BEFORE anything
+        # is raised; then release the file handle.
+        exit_code, to_raise = self._decide_exit(exc_type, exc_value)
+        try:
+            self._logger.log_exit_code(exit_code)
+        finally:
+            self._logger.close()
+        if isinstance(to_raise, SystemExit):
+            raise to_raise from None
+        if to_raise is not None:
+            raise to_raise
+        return False
+
+    def _decide_exit(self, exc_type, exc_value) -> tuple[str, BaseException | None]:
+        """Return the `[EXIT-CODE]` text and the exception to raise (if any).
+
+        `exit_on_failure=False` writes `n/a` only when nothing is in flight;
+        an in-flight exception keeps its normal line.
+        """
         if exc_type is not None:
-            if issubclass(exc_type, (KeyboardInterrupt, SystemExit)):
-                return False
-            if issubclass(exc_type, CascadeBatchError):
-                if self._exit_on_failure:
-                    raise SystemExit(1) from None
-                return False
-            return False  # user-code/other exceptions propagate untouched
+            if issubclass(exc_type, SystemExit):
+                code = exc_value.code if exc_value is not None else None
+                if code is None:
+                    code = 0
+                return str(code if isinstance(code, int) else 1), None
+            if issubclass(exc_type, CascadeBatchError) and self._exit_on_failure:
+                return "1", SystemExit(1)
+            # KeyboardInterrupt, user-code and (exit_on_failure disabled)
+            # batch errors propagate untouched.
+            return f"1 (uncaught exception: {exc_type.__name__})", None
 
         if not self._exit_on_failure:
-            return False
-
+            return "n/a (exit_on_failure disabled)", None
         if self._callback_failures:
-            raise self._callback_failures[0].error
-
+            error = self._callback_failures[0].error
+            return f"1 (callback exception: {type(error).__name__})", error
         if self._has_reportable_failure:
-            raise SystemExit(1)
-
-        return False
+            return "1", SystemExit(1)
+        return "0", None
 
     @overload
     def submit_requests(
@@ -207,7 +237,12 @@ class CascadeWrapperBase:
                 self._execute_chains(chains, executor)
             )
         except Exception as e:
-            self._logger.log_python_error(e, prefix="[CASCADE-REST-CMS] ")
+            prefix = (
+                "[NETWORK] "
+                if classify_failure("operation", e) is FailureCategory.NETWORK
+                else "[CASCADE-REST-CMS] "
+            )
+            self._logger.log_python_error(e, prefix=prefix)
             self._logger.log_batch_end(0, len(chains), has_reportable_failure=True)
             self._has_reportable_failure = True
             raise CascadeBatchError(f"{type(e).__name__}: {e}") from e

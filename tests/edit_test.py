@@ -54,7 +54,6 @@ def change_displayname(single_asset: Asset) -> Asset:
 try:
     with CascadeWrapperBase(
         environmentVariables=environmentConfig,
-        configurationVariables=None,
         debug=debug_config
     ) as cascade:
         # Read all children assets of the `parent_folder`

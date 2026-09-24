@@ -33,6 +33,7 @@ Recognized `debug_config` keys:
 import itertools
 import json
 import logging
+import os
 import sys
 import traceback
 from datetime import UTC, datetime
@@ -40,6 +41,7 @@ from pathlib import Path
 from typing import Any
 
 from .failures import FailureCategory
+from .redaction import mask_token
 
 _CATEGORY_PREFIX = {
     FailureCategory.NETWORK: "[NETWORK] ",
@@ -164,8 +166,14 @@ class OperationLogger:
     rendering decision.
     """
 
-    def __init__(self, server: str, debug_config: dict | None = None):
+    def __init__(
+        self,
+        server: str,
+        debug_config: dict | None = None,
+        log_dir: str | os.PathLike | None = None,
+    ):
         self._server = server
+        self._explicit_log_dir = log_dir
         self._config: dict[str, Any] = debug_config if debug_config is not None else {}
         self._is_debug = debug_config is not None
         self._processed_count = 0  # cumulative across every batch
@@ -197,19 +205,26 @@ class OperationLogger:
     # ------------------------------------------------------------------ #
 
     def _log_dir(self) -> Path:
+        """Explicit `log_dir` argument, else the debug config's, else ./logs."""
+        if self._explicit_log_dir is not None:
+            return Path(self._explicit_log_dir)
         return Path(self._config.get("log_dir", "./logs"))
 
     def _setup_file_logger(self) -> logging.Logger:
-        log_dir = self._log_dir() if self._is_debug else Path("./logs")
+        log_dir = self._log_dir()
         log_dir.mkdir(parents=True, exist_ok=True)
 
-        timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H-%M-%S")
+        # Microseconds plus the per-process serial keep two wrappers built
+        # in the same second (e.g. one per MCP tool call) in separate files.
+        serial = next(_logger_serial)
+        timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H-%M-%S-%f")
         suffix = "debug" if self._is_debug else None
         parts = [self._server, suffix, timestamp] if suffix else [self._server, timestamp]
-        filename = "_".join(parts) + ".log"
+        filename = "_".join(parts) + f"_{serial}.log"
         log_path = log_dir / filename
+        self.log_path = log_path
 
-        logger = logging.getLogger(f"cascade.file.{timestamp}.{next(_logger_serial)}")
+        logger = logging.getLogger(f"cascade.file.{timestamp}.{serial}")
         logger.propagate = False
         handler = logging.FileHandler(log_path)
         handler.setFormatter(logging.Formatter("%(message)s"))
@@ -221,7 +236,7 @@ class OperationLogger:
         logger = logging.getLogger("cascade.console")
         logger.propagate = False
         if not logger.handlers:
-            handler = logging.StreamHandler(sys.stdout)
+            handler = logging.StreamHandler(sys.stderr)
             handler.setFormatter(logging.Formatter("%(message)s"))
             logger.addHandler(handler)
         logger.setLevel(logging.DEBUG)
@@ -235,6 +250,7 @@ class OperationLogger:
         self._script_name = script_name
         self._start_time = datetime.now(UTC)
         self._console("[INIT]: Connecting to " + self._server)
+        self._console(f"[LOG]: {self.log_path}")
         if self._is_debug:
             self._console("[DEBUG]: running in debug mode")
             if self._config.get("show_network_headers"):
@@ -253,7 +269,21 @@ class OperationLogger:
         if self._has_reportable_failure:
             tally += ": reference log for details"
         self._console(tally)
+        self._write(tally)
         self._console("[EXIT]: Disconnecting from " + self._server)
+
+    def log_exit_code(self, outcome: str) -> None:
+        """Write the run's final `[EXIT-CODE]: <outcome>` line to the logfile."""
+        self._write(f"[EXIT-CODE]: {outcome}")
+
+    def close(self) -> None:
+        """Close and detach this logger's file handler, releasing the file.
+
+        Call after the final log line; further `_write` calls are dropped.
+        """
+        for handler in list(self._file_logger.handlers):
+            handler.close()
+            self._file_logger.removeHandler(handler)
 
     # ------------------------------------------------------------------ #
     # Batch framing — brackets one submit_requests() call                 #
@@ -349,17 +379,6 @@ class OperationLogger:
             line += f" | payload: {payload_ref}"
         self._write(line)
 
-    def log_cache_hit(self, method: str, url: str) -> None:
-        """Mark a request served from the local response cache instead of
-        the network, written right after that request's own `[METHOD] URL`
-        line — the surrounding chain line reports success either way, which
-        can make a stale cache look identical to a real (or a broken)
-        request; this line is the only place that distinction is visible.
-        """
-        if not self._is_debug:
-            return
-        self._write(f"[CACHED-{method}] {url}")
-
     def _write_json_file(self, filename: str, data: Any) -> None:
         log_dir = self._log_dir()
         log_dir.mkdir(parents=True, exist_ok=True)
@@ -397,6 +416,9 @@ class OperationLogger:
             return
         self._write("[request-headers]:")
         for k, v in request_headers.items():
+            if k.lower() == "authorization":
+                scheme, _, token = str(v).rpartition(" ")
+                v = f"{scheme} {mask_token(token)}" if scheme else mask_token(token)
             self._write(f"  {k}: {v}")
         self._write("[response-headers]:")
         for k, v in response_headers.items():
@@ -449,5 +471,5 @@ class OperationLogger:
         self._file_logger.debug(line)
 
     def _console(self, line: str):
-        """Write a line to stdout."""
+        """Write a status line to stderr."""
         self._console_logger.info(line)

@@ -26,6 +26,19 @@ skill-authoring workflow and how to rebuild release artifacts — both depend
 on the *published* `cascade-cms-rest` package, not a local copy, so nothing
 here needs to stay in sync with them beyond tagging a release.
 
+## Logging and console output
+
+- `CascadeWrapperBase(environmentVariables, debug=None, *, exit_on_failure=True,
+  log_dir=None)` — there is no response cache and no `configurationVariables`.
+- Status lines (`[INIT]`, `[LOG]: <path>`, `[DONE]`, the tally, `[EXIT]`, console `[ERROR]`)
+  go to **stderr**; stdout belongs to the caller's script.
+- The logfile records the tally line and, last, `[EXIT-CODE]: <outcome>` (see the README's
+  Logging section for the outcomes). Agents verify a run by reading the logfile at the
+  `[LOG]` path, not by capturing console output.
+- `log_dir` (explicit parameter) beats a debug config's `log_dir`; default `./logs`. Log
+  filenames are `{SERVER}[_debug]_{timestamp}_{n}.log`.
+- The API bearer token is masked (`cascade_cms.redaction.mask_token`) wherever it could surface.
+
 ## Maintaining the CHANGELOG
 
 Each section in `CHANGELOG.md` should include a note at the bottom listing

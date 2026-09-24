@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.3.0]
+
+### Removed
+- **BREAKING: response caching is removed entirely** (no persistent and no in-memory cache): `CacheHandler`, `default_cache_backend()`, `OperationLogger.log_cache_hit()` and `ResponseParser._cacheable`. No `./cache` directory is created.
+- **BREAKING: `configurationVariables` is removed from `CascadeWrapperBase`** with no deprecation period. `CascadeWrapperBase(environmentVariables, debug=None, *, exit_on_failure=True, log_dir=None)`; `exit_on_failure` is now keyword-only.
+- **BREAKING: `backendConfig` is removed from `CascadeCMSRestDriver`.**
+- **BREAKING: `python-dotenv` is no longer a dependency**, and `aiohttp-client-cache` is dropped. `aiohttp` is now a direct dependency (`>=3.14.3`).
+
+### Changed
+- **BREAKING: status lines go to stderr instead of stdout** (`[INIT]`, `[DEBUG]`, `[DONE]`, the tally, `[EXIT]`, console `[ERROR]`). Anything reading the tally from stdout must read stderr or the logfile.
+- **BREAKING: a non-200 HTTP status is now a `CascadeError` (category CASCADE, message `"<status> <reason>"`)**, no longer a NETWORK failure. The response body is never read or logged.
+- **BREAKING: `ResponseParser.serializer` is now required**; the `RuntimeWarning` branch is gone.
+- **BREAKING: `RequestExecutor.parser` is now required** (the unused default was removed). `RequestExecutor` is exported from `cascade_cms/__init__.py`.
+- Log filenames now include microseconds and a per-process serial (`{SERVER}[_debug]_{timestamp}_{n}.log`), so two wrappers created in the same second never share a file.
+- A batch-level failure's prefix follows its cause: `[NETWORK]` for network causes, `[CASCADE-REST-CMS]` otherwise.
+- `CascadeCMSRestDriver.close()` clears the closed event loop as the current loop.
+- Release process: the tag-triggered workflow no longer creates a GitHub release (PyPI publishing on tag push is unchanged, with `contents: read`), and `PUBLISHING.md` no longer has a manual `twine upload` step.
+
+### Added
+- `log_dir` keyword-only parameter on `CascadeWrapperBase` (normal and debug mode; created if missing; wins over a debug config's `log_dir`).
+- `[LOG]: <path>` is printed to stderr right after `[INIT]`.
+- The logfile records the tally line and a final `[EXIT-CODE]: <outcome>` line.
+- `cascade_cms.redaction.mask_token()`; the debug logfile masks the `Authorization` header to its last four characters (`Bearer ****abcd`).
+
+### Fixed
+- Each wrapper closes and releases its logfile handle on exit.
+- Verified (Python 3.12): Cascade's `Partitioned` session cookie no longer breaks requests now that the cache library is gone; no compatibility patch is needed in the library.
+
+**Files changed:** `src/cascade_cms/driver.py`, `src/cascade_cms/wrapper.py`, `src/cascade_cms/operation_logger.py`, `src/cascade_cms/cmstypes.py`, `src/cascade_cms/redaction.py` (added), `pyproject.toml`, `.github/workflows/release.yml`, `PUBLISHING.md`, `README.md`, `AGENTS.md`, `tests/test_driver.py`, `tests/test_non200.py` (added), `tests/test_redaction.py` (added), `tests/test_logging_exit.py` (added), `tests/edit_test.py`
+
 ## [3.2.2]
 
 ### Added

@@ -15,13 +15,8 @@ environment_variables = {
     "CASCADE_URL": "...",
     "SERVER": "prod",  # label used for logfile naming
 }
-configuration_variables = {
-    "cache_name": "./cache/cache.sqlite",
-    "allowed_codes": (200,),
-    "allowed_methods": ("GET",),
-}
 
-with CascadeWrapperBase(environment_variables, configuration_variables) as cascade:
+with CascadeWrapperBase(environment_variables) as cascade:
     identifier = IdentifierType(identifier="e868f539ac1001062cfa029c4c5df4d0", asset_type="folder")
     cascade.operations.read(identifier)
     results = cascade.submit_requests(Asset)
@@ -48,7 +43,7 @@ def rewrite(asset):
     asset.keywords = "updated"
     return asset
 
-with CascadeWrapperBase(environment_variables, configuration_variables) as cascade:
+with CascadeWrapperBase(environment_variables) as cascade:
     cascade.operations.read(page_a).edit(page_a, rewrite).publish(page_a)
     cascade.operations.read(page_b).then(report)
     cascade.operations.delete(old_page)
@@ -93,14 +88,17 @@ manager owns it end to end:
   server) — `__exit__` then never raises; read `.success`/`.failed` off the results yourself.
 - The logfile's `!ERROR:` line is prefixed `[NETWORK]` for a network-layer failure or
   `[CASCADE-REST-CMS]` for any other library-side failure; a `CascadeError` or a callback
-  exception gets no prefix.
+  exception gets no prefix. A batch-level failure takes the prefix that matches its cause.
+- Cascade always answers HTTP 200 with a JSON body; a non-200 status (an HTML page from the
+  server layer, e.g. `501 Not Implemented`) is reported as a `CascadeError` whose message is the
+  status code and reason. The HTML body is never read or logged.
 - At exit, the console always prints a tally: `"{failed} failed, {succeeded} succeeded"`,
   cumulative across every `submit_requests()` call in the session, with `": reference log for
   details"` appended only when at least one failure came from the API, the network, or the
-  library itself (not from a callback-only failure).
+  library itself (not from a callback-only failure). The tally is also written to the logfile.
 
 ```python
-with CascadeWrapperBase(environment_variables, configuration_variables) as cascade:
+with CascadeWrapperBase(environment_variables) as cascade:
     cascade.operations.read(identifier)
     results = cascade.submit_requests(Asset)
     for asset in results.success:
@@ -111,11 +109,24 @@ with CascadeWrapperBase(environment_variables, configuration_variables) as casca
 
 ### Logging
 
-`CascadeWrapperBase` accepts an optional third `debug` argument. Leaving it as `None`
-(the default) runs in **normal mode**: a minimal console (`[INIT]`/`[RUNNING]`/`Processed: n/N`/
-`[DONE]`/`[EXIT]`) plus a simple logfile at `./logs/{SERVER}_{timestamp}.log`. Passing a dict
+`CascadeWrapperBase` accepts an optional second `debug` argument. Leaving it as `None`
+(the default) runs in **normal mode**: a minimal console (`[INIT]`/`[LOG]`/`[RUNNING]`/`n/N succeeded`/
+`[DONE]`/`[EXIT]`) plus a simple logfile at `./logs/{SERVER}_{timestamp}_{n}.log`. Passing a dict
 switches to **debug mode**: a quiet console and a verbose, nested logfile at
-`./logs/{SERVER}_debug_{timestamp}.log` describing every request, response, callback, and error.
+`./logs/{SERVER}_debug_{timestamp}_{n}.log` describing every request, response, callback, and error.
+Each wrapper gets its own file, even when two are created in the same second.
+
+- **Status lines go to stderr**, not stdout (`[INIT]`, `[LOG]`, `[DONE]`, the tally, `[EXIT]`,
+  console `[ERROR]` lines), so stdout stays free for your script's own output.
+- **`[LOG]: <path>`** is printed right after `[INIT]`, giving the path of this run's logfile.
+- **`log_dir=`** (keyword-only) sets the log directory in normal and debug mode; it is created if
+  missing and defaults to `./logs`. If a debug config also sets `log_dir`, the parameter wins.
+- **`[EXIT-CODE]:`** is the last line written to the logfile: `0` for a clean run, `1` when the
+  script ends with a failure, `1 (callback exception: <Type>)` / `1 (uncaught exception: <Type>)`
+  when an exception ends it, or `n/a (exit_on_failure disabled)`. Read the logfile for the tally
+  and exit code rather than capturing console output.
+- In debug mode with `show_network_headers`, the `Authorization` header is masked to its last four
+  characters (`Bearer ****abcd`).
 
 ```python
 debug_config = {
@@ -129,7 +140,7 @@ debug_config = {
     "response_line_limit": 8,   # -1 = dump full response body
 }
 
-with CascadeWrapperBase(environment_variables, configuration_variables, debug=debug_config) as cascade:
+with CascadeWrapperBase(environment_variables, debug=debug_config) as cascade:
     ...
 ```
 

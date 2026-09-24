@@ -1,16 +1,13 @@
 import asyncio
 import hashlib
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Literal, TypeVar
 
 from aiohttp import ClientResponse, ClientSession
-from aiohttp_client_cache import SQLiteBackend
-
-# from aiohttp_client_cache.session import CachedSession
-from aiohttp_client_cache.response import CachedResponse
 
 from .cmstypes import (
+    CascadeError,
     Payloads,
     ResponseParser,
     serialize_payload,
@@ -18,40 +15,6 @@ from .cmstypes import (
 from .operation_logger import OperationLogger
 
 T = TypeVar("T")
-
-
-@dataclass
-class CacheHandler:
-    """Thin wrapper around an aiohttp-client-cache SQLite backend.
-
-    Only GET responses are ever cached (enforced by the backend's
-    `allowed_methods` config) so repeated reads skip the network,
-    while POST/PUT requests always hit the server.
-    """
-
-    cache_db: SQLiteBackend
-
-    async def get_response(
-        self,
-        key: str,
-    ) -> CachedResponse | None:
-        return await self.cache_db.get_response(key)
-
-    def get_cache_key(
-        self,
-        method: str,
-        url: str,
-    ) -> str:
-        """Returns a response in cach if it exists"""
-        return self.cache_db.create_key(method, url)
-
-    async def save_response(
-        self,
-        response: ClientResponse,
-        cache_key: str,
-    ):
-        """Check to see if response is cacheable"""
-        return await self.cache_db.save_response(response, cache_key)
 
 
 @dataclass
@@ -64,9 +27,7 @@ class RequestExecutor[T]:
 
     url: str
     method: Literal["GET", "POST", "PUT"]
-    parser: Callable[..., ResponseParser[T]] = field(
-        default=lambda raw: ResponseParser(raw=raw)
-    )
+    parser: Callable[..., ResponseParser[T]]
     payload: Payloads | None = None
     identifier: Any = None
 
@@ -88,19 +49,15 @@ class RequestExecutor[T]:
         self,
         session: ClientSession,
         sem: asyncio.Semaphore,
-        cache: CacheHandler,
         logger: "OperationLogger | None" = None,
     ) -> T:
-        """Execute this request, using the cache for GETs when possible.
+        """Execute this request and parse its response.
 
-        Checks the cache first; on a miss, performs the network request,
-        parses the response, and stores it in the cache if parsing marked
-        it cacheable. Concurrency across requests is bounded by `sem`.
+        Concurrency across requests is bounded by `sem`.
 
         Args:
             session: Shared aiohttp session to issue the request on.
             sem: Semaphore limiting concurrent in-flight requests.
-            cache: Cache handler used to short-circuit repeated GETs.
             logger: Optional logger for recording request/response detail.
 
         Returns:
@@ -111,23 +68,18 @@ class RequestExecutor[T]:
             if self.payload:
                 payload_bytes = serialize_payload(self.payload)
 
-            # Cache the Response
-            cache_key = cache.get_cache_key(self.method, self.url)
-            already_cached = await cache.get_response(cache_key)
-            if already_cached is not None:
-                raw_data = await already_cached.read()
-                if logger:
-                    logger.log_cache_hit(self.method, self.url)
-                    logger.write_response_file(self.log_key, raw_data)
-                parsed_response = self.parser(raw_data)
-                return parsed_response._content  # type: ignore[return-value]
-
             async with session.request(
                 self.method,
                 self.url,
                 data=payload_bytes,
             ) as response:
-                response.raise_for_status()
+                if response.status != 200:
+                    # Cascade always answers 200 with a JSON body; anything
+                    # else is an HTML page from the Tomcat layer. Report the
+                    # status only — the body is never read, logged or shown.
+                    return CascadeError(  # type: ignore[return-value]
+                        message=f"{response.status} {response.reason}"
+                    )
                 raw_data = await response.read()
                 if logger:
                     logger.write_response_file(self.log_key, raw_data)
@@ -137,27 +89,7 @@ class RequestExecutor[T]:
                     )
                 # parse raw data
                 parsed_response = self.parser(raw_data)
-
-                if parsed_response._cacheable:
-                    await cache.save_response(
-                        response,
-                        cache_key,
-                    )
                 return parsed_response._content  # type: ignore[return-value]
-
-
-def default_cache_backend() -> SQLiteBackend:
-    """Build the default cache backend: SQLite, GET-only, 200s only.
-
-    Constructed on demand rather than at module scope so that merely
-    importing `cascade_cms` does not create a `./cache/` directory in the
-    caller's working directory.
-    """
-    return SQLiteBackend(
-        cache_name="./cache/cache.sqlite",
-        allowed_codes=(200,),
-        allowed_methods=("GET",),
-    )
 
 
 class CascadeCMSRestDriver:
@@ -172,21 +104,18 @@ class CascadeCMSRestDriver:
         self,
         apiKey: str,
         cascade_url: str,
-        backendConfig: dict[str, Any] | None,
         logger: OperationLogger | None = None,
     ):
-        """Set up the aiohttp session, event loop, and cache for this driver.
+        """Set up the aiohttp session and event loop for this driver.
 
         Creates a dedicated event loop that is reused for the lifetime of
         this driver instance (rather than one per call), so all requests
-        and cache I/O run on the same loop.
+        run on the same loop.
 
         Args:
             apiKey: Cascade CMS API bearer token.
             cascade_url: Base URL of the Cascade CMS instance (without
                 the `/api/v1` suffix, which is appended automatically).
-            backendConfig: kwargs forwarded to `SQLiteBackend` to override
-                the default cache config, or None to use the default.
             logger: Optional logger for recording operations/errors.
         """
 
@@ -196,7 +125,7 @@ class CascadeCMSRestDriver:
         self.base_url = f"{cascade_url}/api/v1"
 
         # Stores response object for debugging purpose. the ClientResponse object contains request infomation as well.
-        self.request_response_info: CachedResponse | None = None
+        self.request_response_info: ClientResponse | None = None
 
         # intializing event loop, for re-use for the rest of the session.
         self.eventLoop = asyncio.new_event_loop()
@@ -207,12 +136,6 @@ class CascadeCMSRestDriver:
             "Cache-Control": "private",
             "Content-Type": "application/json;charset=UTF-8",
         }
-
-        self.cache: CacheHandler
-        if backendConfig is None:
-            self.cache = CacheHandler(default_cache_backend())
-        else:
-            self.cache = CacheHandler(SQLiteBackend(**backendConfig))
 
         # Shared across every chain running on this driver, so concurrency
         # stays bounded no matter how many chains are in flight at once.
@@ -259,7 +182,7 @@ class CascadeCMSRestDriver:
             # job (execute/execute_async), done after this returns a value.
             try:
                 return await executor.fetch(
-                    self.session, self._semaphore, self.cache, self._logger
+                    self.session, self._semaphore, self._logger
                 )
             except Exception as exc:  # noqa: BLE001 - surfaced as a value, see docstring
                 return exc
@@ -283,17 +206,12 @@ class CascadeCMSRestDriver:
         return self.eventLoop.run_until_complete(self.execute_requests(requests))
 
     def close(self):
-        """Tear down the aiohttp session, cache DB, and event loop."""
+        """Tear down the aiohttp session and event loop."""
         if getattr(self, "session", None) is not None and not getattr(
             self.session, "closed", False
         ):
             self.eventLoop.run_until_complete(self.session.close())
 
-        if (
-            getattr(self, "cache", None) is not None
-            and getattr(self.cache, "cache_db", None) is not None
-        ):
-            self.eventLoop.run_until_complete(self.cache.cache_db.close())
-
         self.eventLoop.close()
+        asyncio.set_event_loop(None)
         return True

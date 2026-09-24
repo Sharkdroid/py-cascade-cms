@@ -1060,31 +1060,25 @@ class ResponseParser[T](BaseModel):
     """Parses a raw response body, trying `CascadeError` first and falling
     back to `serializer` on the expected success shape.
 
-    `_content` holds the parsed result (either a `CascadeError` or a `T`),
-    and `_cacheable` is set to True only when the success-path parse
-    succeeds, so error responses are never cached.
+    `_content` holds the parsed result (either a `CascadeError` or a `T`).
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    serializer: TypeAdapter[Any] | AssetAdapter | None = None
+    serializer: TypeAdapter[Any] | AssetAdapter
     _content: T | CascadeError | None = PrivateAttr(default=None)
-    _cacheable: bool = PrivateAttr(default=False)
 
     def __init__(
         self,
         raw: bytes,
-        serializer: TypeAdapter[Any] | AssetAdapter | None = None,
+        serializer: TypeAdapter[Any] | AssetAdapter,
         **kwargs,
     ):
         super().__init__(serializer=serializer, **kwargs)
         try:
             self._content = CascadeError.model_validate_json(raw)
         except ValidationError:
-            if self.serializer is None:
-                raise RuntimeWarning("No serializer included...")
             self._content = self.serializer.validate_json(raw)  # type: ignore[assignment]
-            self._cacheable = True
 
 
 # ----- Parser Functions -----

@@ -74,21 +74,16 @@
    git push origin master --tags       # Push commits + all tags
    ```
 
-### 6. Build & Publish to PyPI
+### 6. Publishing Happens Automatically
 
-   **Build:**
-   ```bash
-   python -m build
-   ```
-   
-   This creates `dist/cascade_cms_rest-3.0.2-py3-none-any.whl` and `.tar.gz`
+   Pushing the `v*` tag (step 5) triggers the **Release** workflow
+   (`.github/workflows/release.yml`), which builds the sdist and wheel and
+   publishes them to PyPI. Do **not** run `twine upload` by hand: the tag
+   already publishes via CI, so a manual upload collides ("file already
+   exists"), and a stale local `dist/` would re-upload old versions.
 
-   **Publish:**
-   ```bash
-   twine upload dist/*
-   ```
-   
-   You'll be prompted for PyPI credentials (or use `.pypirc` config)
+   Watch the workflow run in the GitHub Actions tab, then verify on PyPI
+   (below). The workflow does not create a GitHub release.
 
 ## Verification
 
@@ -112,12 +107,10 @@ git commit -m "Bump version to 3.0.2"
 # 4. Create an annotated tag (v-prefix is convention)
 git tag -a v3.0.2 -m "Release version 3.0.2"
 
-# 5. Push commits and tags to GitHub
+# 5. Push commits and tags to GitHub; the tag push publishes to PyPI via CI
 git push origin master --tags
 
-# 6. Build and publish to PyPI
-python -m build
-twine upload dist/*
+# 6. Verify on PyPI (https://pypi.org/project/cascade-cms-rest/)
 ```
 
 ## Troubleshooting
