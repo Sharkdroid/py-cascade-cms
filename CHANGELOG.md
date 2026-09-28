@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.5.0]
+
+### Added
+- **`to_identifier` / `to_identifiers`** (`from cascade_cms.utils import to_identifiers`): pure helpers that coerce raw `{id, type, path}` dicts (for example a folder's `children`) into `IdentifierType`. `to_identifiers` drops `recycled` entries unless `include_recycled=True`, preserves order, and returns `[]` for `None`. Malformed entries raise `ValueError` (prefixed `entry <index>: ` in `to_identifiers`) naming the field and reason, never the input values. No I/O; not exported from `cascade_cms` itself.
+- Regression test locking in the held-asset edit shape: assets read in one submit can be edited in a later one with `edit(asset)` (one chain each) or `edit(list)`.
+
+**Files changed:** `src/cascade_cms/utils/identifiers.py` (added), `src/cascade_cms/utils/__init__.py`, `tests/test_identifiers.py` (added), `tests/test_held_asset_edit.py` (added), `README.md`, `AGENTS.md`, `CHANGELOG.md`, `pyproject.toml`
+
 ## [3.4.0]
 
 ### Added

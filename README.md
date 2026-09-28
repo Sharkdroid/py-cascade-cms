@@ -107,6 +107,26 @@ with CascadeWrapperBase(environment_variables) as cascade:
 # raised (or exited) on the way out.
 ```
 
+### Identifier coercion
+
+`cascade_cms.utils.to_identifiers` turns raw `{id, type, path}` dicts, such as a folder's
+`children`, into `IdentifierType` objects. It does no I/O. Entries flagged `recycled` are dropped
+unless `include_recycled=True`; a malformed entry raises `ValueError` prefixed `entry <index>: `
+that names the field and reason but never echoes input values. `to_identifier` does the same for
+one mapping and never filters by `recycled`.
+
+```python
+from cascade_cms.cmstypes import Asset
+from cascade_cms.utils import to_identifiers
+
+cascade.operations.read(folder_identifier)
+folder = cascade.submit_requests(Asset).success[0]
+children = to_identifiers(folder.get("children"))  # list[IdentifierType]
+
+cascade.operations.read(children)
+assets = cascade.submit_requests(Asset).success
+```
+
 ### Logging
 
 `CascadeWrapperBase` accepts an optional second `debug` argument. Leaving it as `None`
