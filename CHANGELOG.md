@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.6.0]
+
+### Fixed
+- **`get_page_configuration()` results now write through.** Previously an edit to a region's `content` was silently not sent: the models were detached copies and `dump_json` serializes the raw data. Assigning `content` (validated as `str | None`) now also updates the region's raw dict, and the views are rebuilt from the current data on every call, so raw edits and reassigning `pageConfigurations` are visible. `Asset._page_configs` is still a `list[PageConfiguration]`.
+
+### Changed
+- Assigning `name` on a `PageRegion` or `PageConfiguration` now raises `AttributeError` (only `content` is editable). Appending to or removing from `page_regions` is not propagated, and no configuration or region is ever created.
+
+**Files changed:** `src/cascade_cms/cmstypes.py`, `tests/test_page_configurations.py` (added), `CHANGELOG.md`, `pyproject.toml`
+
 ## [3.5.0]
 
 ### Added

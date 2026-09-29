@@ -495,6 +495,18 @@ class PageRegion(BaseModel):
     name: str
     content: str | None = None
 
+    # The raw region dict this view was built from (set by `_build_page_views`).
+    _raw: dict[str, Any] | None = PrivateAttr(default=None)
+
+    def __setattr__(self, key: str, value: object) -> None:
+        if key == "name":
+            raise AttributeError(
+                "PageRegion.name is read-only; only content can be edited"
+            )
+        super().__setattr__(key, value)  # validates first; raises on bad input
+        if key == "content" and self._raw is not None:
+            self._raw["content"] = self.content
+
 
 class PageConfiguration(BaseModel):
     model_config = ConfigDict(
@@ -506,6 +518,29 @@ class PageConfiguration(BaseModel):
     page_regions: list[PageRegion] = Field(
         validation_alias="pageRegions", serialization_alias="pageRegions"
     )
+
+    def __setattr__(self, key: str, value: object) -> None:
+        if key == "name":
+            raise AttributeError(
+                "PageConfiguration.name is read-only; only region content "
+                "can be edited"
+            )
+        super().__setattr__(key, value)
+
+
+def _build_page_views(raw_configs: list[dict[str, Any]]) -> list[PageConfiguration]:
+    """Parse raw `pageConfigurations` dicts into models that write through.
+
+    Each region model keeps a reference to its raw dict, so assigning
+    `content` updates the data `AssetAdapter.dump_json` serializes.
+    """
+    views: list[PageConfiguration] = []
+    for raw_config in raw_configs:
+        config = PageConfiguration(**raw_config)
+        for region, raw_region in zip(config.page_regions, raw_config["pageRegions"]):
+            region._raw = raw_region
+        views.append(config)
+    return views
 
 
 """
@@ -617,7 +652,8 @@ class Asset:
     `__setattr__` only enforces that an existing field keeps its Python
     type when reassigned (it does not validate against a schema).
     `pageConfigurations`, if present, is parsed into `PageConfiguration`
-    models up front for convenient access via `get_page_configuration`.
+    models up front (failing fast on a malformed one) for access via
+    `get_page_configuration`, which writes region `content` through.
     """
 
     _asset_type: str
@@ -630,17 +666,12 @@ class Asset:
         object.__setattr__(self, "_data", inner)
 
         # Parse pageConfigurations into Pydantic models
-        if "pageConfigurations" in self._data:
-            object.__setattr__(
-                self,
-                "_page_configs",
-                [
-                    PageConfiguration(**config)
-                    for config in self._data["pageConfigurations"]
-                ],
-            )
-        else:
-            object.__setattr__(self, "_page_configs", [])
+        object.__setattr__(self, "_page_configs", self._current_page_views())
+
+    def _current_page_views(self) -> list[PageConfiguration]:
+        if "pageConfigurations" not in self._data:
+            return []
+        return _build_page_views(self._data["pageConfigurations"])
 
     def __setattr__(self, key: str, value: object) -> None:
         if key.startswith("_"):
@@ -741,8 +772,19 @@ class Asset:
     ) -> PageConfiguration | PageRegion | None:
         """
         Find a page configuration and optionally a specific region within it.
-        Returns Pydantic model objects by reference.
-        Raises KeyError if required fields (name, pageRegions) are missing from models.
+
+        The returned models are live views of this asset's data, rebuilt from
+        the current data on every call, so raw edits and reassigning
+        `pageConfigurations` are visible. Assigning a region's `content`
+        (validated: `str | None`) is written into the asset and sent on edit.
+
+        Limits: only `content` writes through; assigning `name` on a region or
+        configuration raises AttributeError. Appending to or removing from a
+        `page_regions` list is not propagated, and no configuration or region
+        is ever created. A misspelled name returns None, so an edit that then
+        changes nothing still succeeds; guard against None before editing.
+        Raises pydantic ValidationError if the raw data is malformed, and
+        KeyError if required fields (name, pageRegions) are missing.
 
         Args:
             configuration_name: The 'name' of the configuration e.g. 'ASPX', 'XML'
@@ -753,6 +795,7 @@ class Asset:
             - PageRegion object if page_region is also provided
             - None if either is not found
         """
+        object.__setattr__(self, "_page_configs", self._current_page_views())
         try:
             config = next(
                 (c for c in self._page_configs if c.name == configuration_name), None
@@ -1028,11 +1071,10 @@ class AssetAdapter:
         return Asset(json.loads(json_str))
 
     def dump_json(self, asset: Asset) -> bytes:
-        # `_page_configs` only models `name`/`pageRegions[].content` for
-        # convenient access via `get_page_configuration`; it is not
-        # authoritative on write. `_data["pageConfigurations"]` (copied
-        # below via `asset._data`) still holds the original raw dicts,
-        # including fields the model doesn't parse (templateId, blockId,
+        # `_data` is what gets serialized. The `_page_configs` models only
+        # cover `name`/`pageRegions[].content`; a region's `content`
+        # assignment writes through to its raw dict in `_data`. The raw dicts
+        # also keep fields the models don't parse (templateId, blockId,
         # formatId, ...), so round-tripping preserves them.
         data = {**asset._data}
         reconstructed = {"asset": {asset._asset_type: data}}
