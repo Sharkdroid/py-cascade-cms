@@ -58,6 +58,17 @@ here needs to stay in sync with them beyond tagging a release.
   `noFormat: false`. Derive "has a block/format" from the ids/paths, not the flags, and verify
   surprising state against the live server.
 
+## Releasing to PyPI
+
+Pushing a commit to `master` does **not** publish anything. The `Release` workflow
+(`.github/workflows/release.yml`) runs only when a tag matching `v*.*.*` is pushed
+(e.g. `v3.7.0`; a bare `3.7.0` does not match and triggers nothing). It builds the
+sdist/wheel and publishes to PyPI (the `publish` job uses the `pypi` environment).
+To release: commit the version bump and CHANGELOG, then
+`git tag -a vX.Y.Z -m "Release X.Y.Z"` and `git push origin vX.Y.Z`. See `PUBLISHING.md`.
+Downstream consumers (`cascade-cms-tools`) depend on the *published* package, so they
+cannot pick up a change until the tag has been pushed and PyPI shows the version.
+
 ## Maintaining the CHANGELOG
 
 Each section in `CHANGELOG.md` should include a note at the bottom listing
