@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.7.1]
+
+### Changed
+- `PageRegion` and `PageConfiguration` are now genuinely frozen (`ConfigDict(frozen=True, populate_by_name=True)`), so instances are hashable. Writes and deletes still raise `ReadOnlyPageConfigError` (an `AttributeError`) with the "edit the `template` / `pageConfigurationSet` asset" message: the frozen dataclass's generated `__setattr__`/`__delattr__` are replaced after class creation, since a frozen dataclass cannot define them in its body.
+
+**Files changed:** `src/cascade_cms/cmstypes.py`, `CHANGELOG.md`, `pyproject.toml`
+
 ## [3.7.0]
 
 ### Changed (breaking)

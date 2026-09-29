@@ -1,6 +1,7 @@
 import json
 import uuid
 import warnings
+from collections.abc import Callable
 from datetime import datetime
 from typing import (
     Annotated,
@@ -8,6 +9,7 @@ from typing import (
     ClassVar,
     Literal,
     NamedTuple,
+    NoReturn,
     Self,
     TypeVar,
     cast,
@@ -502,7 +504,7 @@ CONFIGURATION_READ_ONLY_MESSAGE = (
     "`template` asset's `pageRegions` for regions)"
 )
 
-_PAGE_VIEW_CONFIG = ConfigDict(populate_by_name=True)
+_PAGE_VIEW_CONFIG = ConfigDict(populate_by_name=True, frozen=True)
 
 
 @pydantic_dataclass(config=_PAGE_VIEW_CONFIG)
@@ -546,12 +548,6 @@ class PageRegion:
     )
     id: str | None = None
 
-    def __setattr__(self, key: str, value: object) -> None:
-        raise ReadOnlyPageConfigError(REGION_READ_ONLY_MESSAGE)
-
-    def __delattr__(self, key: str) -> None:
-        raise ReadOnlyPageConfigError(REGION_READ_ONLY_MESSAGE)
-
 
 @pydantic_dataclass(config=_PAGE_VIEW_CONFIG)
 class PageConfiguration:
@@ -585,11 +581,23 @@ class PageConfiguration:
     publishable: bool | None = None
     id: str | None = None
 
-    def __setattr__(self, key: str, value: object) -> None:
-        raise ReadOnlyPageConfigError(CONFIGURATION_READ_ONLY_MESSAGE)
 
-    def __delattr__(self, key: str) -> None:
-        raise ReadOnlyPageConfigError(CONFIGURATION_READ_ONLY_MESSAGE)
+def _read_only(message: str) -> Callable[..., NoReturn]:
+    def blocked(self: object, key: str, *value: object) -> NoReturn:
+        raise ReadOnlyPageConfigError(message)
+
+    return blocked
+
+
+# `frozen=True` already blocks writes, but a frozen dataclass forbids defining
+# `__setattr__` in its body and raises a generic FrozenInstanceError. Replace
+# the generated methods after the fact so the error says where to edit.
+PageRegion.__setattr__ = PageRegion.__delattr__ = _read_only(  # type: ignore[assignment,method-assign]
+    REGION_READ_ONLY_MESSAGE
+)
+PageConfiguration.__setattr__ = PageConfiguration.__delattr__ = _read_only(  # type: ignore[assignment,method-assign]
+    CONFIGURATION_READ_ONLY_MESSAGE
+)
 
 
 _page_configuration_adapter: TypeAdapter[PageConfiguration] = TypeAdapter(
