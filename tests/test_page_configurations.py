@@ -1,4 +1,4 @@
-"""Page-configuration accessors write region `content` through to the payload."""
+"""Page configurations and regions are read-only snapshots."""
 
 import json
 
@@ -12,29 +12,42 @@ from cascade_cms.cmstypes import (
     IdentifierType,
     PageConfiguration,
     PageRegion,
+    ReadOnlyPageConfigError,
     asset_adapter,
 )
 
+REGION = {
+    "name": "ALERT-BANNER",
+    "blockId": "32ff90a2ac1001066485f86178913ba8",
+    "blockPath": "_common/_cms/blocks/alert banner",
+    "blockRecycled": False,
+    "noBlock": False,
+    "formatId": "330384c3ac1001066485f86121a12634",
+    "formatPath": "_common/_cms/formats/alert-banner",
+    "formatRecycled": False,
+    "noFormat": False,
+    "id": "6e2e008aac10010f3e1865e77b6ebf1a",
+}
+CONFIG = {
+    "name": "ASPX",
+    "defaultConfiguration": True,
+    "templateId": "fdbd80e9ac1001065466b17994c4e4a3",
+    "templatePath": "_common/_cms/templates/standard-page",
+    "formatRecycled": False,
+    "pageRegions": [REGION],
+    "includeXMLDeclaration": False,
+    "publishable": False,
+    "id": "ff9c4933ac1001065466b1795a679dce",
+}
 
-def _page(**extra) -> Asset:
+
+def _page() -> Asset:
     return make_asset(
         id=ID_ONE,
         pageConfigurations=[
-            {
-                "name": "ASPX",
-                "templateId": "t1",
-                "pageRegions": [
-                    {
-                        "name": "DEFAULT",
-                        "blockId": "b1",
-                        "noBlock": False,
-                        "content": "old",
-                    },
-                    {"name": "FOOTER", "blockId": None, "content": "f"},
-                ],
-            }
+            json.loads(json.dumps(CONFIG)),
+            {"name": "XML", "pageRegions": []},
         ],
-        **extra,
     )
 
 
@@ -42,142 +55,142 @@ def _payload(asset: Asset) -> dict:
     return json.loads(asset_adapter.dump_json(asset))["asset"]["page"]
 
 
-def _region(asset: Asset, name: str = "DEFAULT") -> PageRegion:
-    region = asset.get_page_configuration("ASPX", name)
+def _config(asset: Asset, name: str = "ASPX") -> PageConfiguration:
+    config = asset.get_page_configuration(name)
+    assert isinstance(config, PageConfiguration)
+    return config
+
+
+def _region(asset: Asset) -> PageRegion:
+    region = asset.get_page_configuration("ASPX", "ALERT-BANNER")
     assert isinstance(region, PageRegion)
     return region
 
 
-def test_accessor_edit_reaches_payload():
-    asset = _page()
-    _region(asset).content = "NEW"
-    regions = _payload(asset)["pageConfigurations"][0]["pageRegions"]
-    assert regions[0]["content"] == "NEW"
-    assert regions[1]["content"] == "f"
+def test_parses_full_shape():
+    config = _config(_page())
+    assert config.default_configuration is True
+    assert config.template_path == "_common/_cms/templates/standard-page"
+    assert config.include_xml_declaration is False
+    assert config.publishable is False
+    assert config.id == CONFIG["id"]
+    region = config.page_regions[0]
+    assert region.name == "ALERT-BANNER"
+    assert region.block_id == REGION["blockId"]
+    assert region.format_path == REGION["formatPath"]
+    assert region.id == REGION["id"]
 
 
-def test_edit_via_config_page_regions_reaches_payload():
-    asset = _page()
-    config = asset.get_page_configuration("ASPX")
-    assert isinstance(config, PageConfiguration)
-    config.page_regions[1].content = "NEW-FOOTER"
-    regions = _payload(asset)["pageConfigurations"][0]["pageRegions"]
-    assert regions[1]["content"] == "NEW-FOOTER"
-    assert regions[0]["content"] == "old"
+def test_empty_page_regions():
+    assert _config(_page(), "XML").page_regions == ()
 
 
-def test_unmodelled_fields_preserved():
-    asset = _page()
-    _region(asset).content = "NEW"
-    config = _payload(asset)["pageConfigurations"][0]
-    assert config["templateId"] == "t1"
-    assert config["pageRegions"][0]["blockId"] == "b1"
-    assert config["pageRegions"][0]["noBlock"] is False
-
-
-def test_raw_edit_visible_through_accessor():
-    asset = _page()
-    raw = asset._data["pageConfigurations"][0]["pageRegions"][0]
-    raw["content"] = "RAW"
-    assert _region(asset).content == "RAW"
-
-
-def test_wholesale_reassignment_visible():
-    asset = _page()
-    asset.pageConfigurations = [
-        {"name": "XML", "pageRegions": [{"name": "DEFAULT", "content": "x"}]}
-    ]
-    assert asset.get_page_configuration("ASPX") is None
-    region = asset.get_page_configuration("XML", "DEFAULT")
-    assert isinstance(region, PageRegion)
-    assert region.content == "x"
-    region.content = "y"
-    assert _payload(asset)["pageConfigurations"][0]["pageRegions"][0]["content"] == "y"
-
-
-def test_invalid_content_raises_and_payload_unchanged():
-    asset = _page()
-    region = _region(asset)
-    with pytest.raises(ValidationError):
-        region.content = 123  # type: ignore[assignment]
-    assert _payload(asset)["pageConfigurations"][0]["pageRegions"][0]["content"] == "old"
-
-
-def test_content_none_is_written():
-    asset = _page()
-    _region(asset).content = None
-    assert _payload(asset)["pageConfigurations"][0]["pageRegions"][0]["content"] is None
-
-
-def test_assigning_name_raises():
-    asset = _page()
-    region = _region(asset)
-    with pytest.raises(AttributeError, match="PageRegion.name is read-only"):
-        region.name = "OTHER"
-    config = asset.get_page_configuration("ASPX")
-    assert isinstance(config, PageConfiguration)
-    with pytest.raises(AttributeError, match="PageConfiguration.name is read-only"):
-        config.name = "OTHER"
-    assert _payload(asset)["pageConfigurations"][0]["name"] == "ASPX"
-
-
-def test_construction_from_raw_data_unaffected():
-    region = PageRegion(name="DEFAULT", content="c")
-    config = PageConfiguration(name="ASPX", pageRegions=[{"name": "DEFAULT"}])
-    assert region.name == "DEFAULT"
-    assert config.page_regions[0].name == "DEFAULT"
-    region.content = "d"  # no raw dict attached: plain validated assignment
-    assert region.content == "d"
-
-
-def test_misses_return_none():
-    asset = _page()
-    assert asset.get_page_configuration("NOPE") is None
-    assert asset.get_page_configuration("ASPX", "NOPE") is None
-    assert make_asset(id=ID_ONE).get_page_configuration("ASPX") is None
-
-
-def test_two_configurations_edit_reaches_only_the_intended_one():
+def test_missing_block_and_format_keys_are_none_not_trusted_flags():
     asset = make_asset(
         id=ID_ONE,
         pageConfigurations=[
-            {"name": "ASPX", "pageRegions": [{"name": "DEFAULT", "content": "a"}]},
-            {"name": "XML", "pageRegions": [{"name": "DEFAULT", "content": "x"}]},
+            {"name": "ASPX", "pageRegions": [{"name": "R", "noBlock": False}]}
         ],
     )
-    region = asset.get_page_configuration("XML", "DEFAULT")
+    region = asset.get_page_configuration("ASPX", "R")
     assert isinstance(region, PageRegion)
-    region.content = "X2"
-    configs = _payload(asset)["pageConfigurations"]
-    assert configs[0]["pageRegions"][0]["content"] == "a"
-    assert configs[1]["pageRegions"][0]["content"] == "X2"
+    assert region.block_id is None and region.block_path is None
+    assert region.no_block is False  # passed through as Cascade reported it
+    assert region.no_format is None
+
+
+@pytest.mark.parametrize("attr", ["name", "block_id", "no_block", "id"])
+def test_region_assignment_raises_with_template_message(attr):
+    region = _region(_page())
+    with pytest.raises(ReadOnlyPageConfigError, match="template level") as exc:
+        setattr(region, attr, "x")
+    assert "`template` asset's `pageRegions`" in str(exc.value)
+
+
+@pytest.mark.parametrize("attr", ["name", "publishable", "template_id"])
+def test_config_assignment_raises_with_configuration_set_message(attr):
+    config = _config(_page())
+    with pytest.raises(ReadOnlyPageConfigError) as exc:
+        setattr(config, attr, "x")
+    assert "pageConfigurationSet" in str(exc.value)
+
+
+def test_deletion_raises():
+    asset = _page()
+    with pytest.raises(ReadOnlyPageConfigError):
+        del _region(asset).name
+    with pytest.raises(ReadOnlyPageConfigError):
+        del _config(asset).name
+
+
+def test_read_only_error_is_attribute_error():
+    assert issubclass(ReadOnlyPageConfigError, AttributeError)
+
+
+def test_page_regions_is_immutable():
+    config = _config(_page())
+    assert isinstance(config.page_regions, tuple)
+    with pytest.raises(AttributeError):
+        config.page_regions.append(REGION)  # type: ignore[attr-defined]
+
+
+def test_attempted_mutations_leave_payload_unchanged():
+    asset = _page()
+    before = _payload(asset)
+    for target, attr in ((_region(asset), "block_id"), (_config(asset), "name")):
+        with pytest.raises(ReadOnlyPageConfigError):
+            setattr(target, attr, "changed")
+    assert _payload(asset) == before
+    config = before["pageConfigurations"][0]
+    assert config["templateId"] == CONFIG["templateId"]
+    assert config["pageRegions"][0]["blockId"] == REGION["blockId"]
+    assert config["pageRegions"][0]["noBlock"] is False
+
+
+def test_wholesale_reassignment_raises():
+    asset = _page()
+    with pytest.raises(ReadOnlyPageConfigError, match="pageConfigurationSet"):
+        asset.pageConfigurations = []
+    assert len(_payload(asset)["pageConfigurations"]) == 2
+
+
+def test_raw_change_visible_on_next_lookup():
+    asset = _page()
+    asset._data["pageConfigurations"][0]["pageRegions"][0]["blockId"] = "b2"
+    assert _region(asset).block_id == "b2"
+
+
+def test_lookup_misses_return_none():
+    asset = _page()
+    assert asset.get_page_configuration("NOPE") is None
+    assert asset.get_page_configuration("ASPX", "NOPE") is None
 
 
 def test_page_configs_compat_list_of_page_configuration():
     asset = _page()
     assert isinstance(asset._page_configs, list)
-    assert all(isinstance(c, PageConfiguration) for c in asset._page_configs)
-    assert [c.name for c in asset._page_configs] == ["ASPX"]
+    assert [c.name for c in asset._page_configs] == ["ASPX", "XML"]
 
 
 def test_malformed_config_fails_at_creation():
     with pytest.raises(ValidationError):
-        make_asset(id=ID_ONE, pageConfigurations=[{"name": "ASPX"}])
+        make_asset(id=ID_ONE, pageConfigurations=[{"pageRegions": []}])
 
 
-def test_edit_chain_sends_new_content():
+def test_edit_chain_sends_regions_untouched():
     ident = IdentifierType(id=ID_ONE, type="page")
     driver = StubDriver([[_page()], [CascadeSuccess(success=True)]])
     wrapper = make_wrapper(driver)
     try:
 
-        def rewrite(asset: Asset) -> Asset:
-            region = asset.get_page_configuration("ASPX", "DEFAULT")
+        def attempt(asset: Asset) -> Asset:
+            region = asset.get_page_configuration("ASPX", "ALERT-BANNER")
             assert isinstance(region, PageRegion)
-            region.content = "NEW"
+            with pytest.raises(ReadOnlyPageConfigError):
+                region.block_id = "changed"
             return asset
 
-        wrapper.operations.read(ident).edit(rewrite)
+        wrapper.operations.read(ident).edit(attempt)
         results = wrapper.submit_requests(Asset)
         assert results.failed == []
 
@@ -189,6 +202,6 @@ def test_edit_chain_sends_new_content():
         ]
         assert len(edits) == 1
         sent = json.loads(asset_adapter.dump_json(edits[0].payload))["asset"]["page"]
-        assert sent["pageConfigurations"][0]["pageRegions"][0]["content"] == "NEW"
+        assert sent["pageConfigurations"][0] == CONFIG
     finally:
         driver.eventLoop.close()

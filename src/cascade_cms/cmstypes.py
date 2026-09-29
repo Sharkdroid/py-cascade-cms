@@ -27,6 +27,7 @@ from pydantic import (
     model_serializer,
     model_validator,
 )
+from pydantic.dataclasses import dataclass as pydantic_dataclass
 
 T = TypeVar("T")
 
@@ -486,61 +487,122 @@ def edit_log_identifier_from_asset(asset: "Asset") -> AssetLogIdentifier:
 # annotations, which Python evaluates immediately at class-definition time.
 
 
-class PageRegion(BaseModel):
-    model_config = ConfigDict(
-        validate_assignment=True,
-        from_attributes=True,
-    )
+class ReadOnlyPageConfigError(AttributeError):
+    """Raised on any attempt to modify a `PageConfiguration` or `PageRegion`."""
+
+
+REGION_READ_ONLY_MESSAGE = (
+    "cannot make direct edits to a page's configuration region. Editing "
+    "regions is only allowed at the template level: edit the `template` "
+    "asset's `pageRegions` instead"
+)
+CONFIGURATION_READ_ONLY_MESSAGE = (
+    "cannot make direct edits to a page's configuration. Edit the "
+    "`pageConfigurationSet` asset's `pageConfiguration` instead (or the "
+    "`template` asset's `pageRegions` for regions)"
+)
+
+_PAGE_VIEW_CONFIG = ConfigDict(populate_by_name=True)
+
+
+@pydantic_dataclass(config=_PAGE_VIEW_CONFIG)
+class PageRegion:
+    """Read-only snapshot of one region of a page configuration.
+
+    Cascade ignores region edits sent through a page's `edit()`; regions can
+    only be changed on the `template` asset. Any assignment or deletion raises
+    `ReadOnlyPageConfigError`, and nothing here is ever written back to the
+    asset.
+
+    Do not trust Cascade's `noBlock`/`noFormat` flags: they have been observed
+    as `false` on regions with no `blockId`/`blockPath` or `formatId`/
+    `formatPath`. Check the ids/paths themselves.
+    """
 
     name: str
-    content: str | None = None
-
-    # The raw region dict this view was built from (set by `_build_page_views`).
-    _raw: dict[str, Any] | None = PrivateAttr(default=None)
+    block_id: str | None = Field(
+        default=None, validation_alias="blockId", serialization_alias="blockId"
+    )
+    block_path: str | None = Field(
+        default=None, validation_alias="blockPath", serialization_alias="blockPath"
+    )
+    block_recycled: bool | None = Field(
+        default=None, validation_alias="blockRecycled", serialization_alias="blockRecycled"
+    )
+    no_block: bool | None = Field(
+        default=None, validation_alias="noBlock", serialization_alias="noBlock"
+    )
+    format_id: str | None = Field(
+        default=None, validation_alias="formatId", serialization_alias="formatId"
+    )
+    format_path: str | None = Field(
+        default=None, validation_alias="formatPath", serialization_alias="formatPath"
+    )
+    format_recycled: bool | None = Field(
+        default=None, validation_alias="formatRecycled", serialization_alias="formatRecycled"
+    )
+    no_format: bool | None = Field(
+        default=None, validation_alias="noFormat", serialization_alias="noFormat"
+    )
+    id: str | None = None
 
     def __setattr__(self, key: str, value: object) -> None:
-        if key == "name":
-            raise AttributeError(
-                "PageRegion.name is read-only; only content can be edited"
-            )
-        super().__setattr__(key, value)  # validates first; raises on bad input
-        if key == "content" and self._raw is not None:
-            self._raw["content"] = self.content
+        raise ReadOnlyPageConfigError(REGION_READ_ONLY_MESSAGE)
+
+    def __delattr__(self, key: str) -> None:
+        raise ReadOnlyPageConfigError(REGION_READ_ONLY_MESSAGE)
 
 
-class PageConfiguration(BaseModel):
-    model_config = ConfigDict(
-        validate_assignment=True,
-        from_attributes=True,
-    )
+@pydantic_dataclass(config=_PAGE_VIEW_CONFIG)
+class PageConfiguration:
+    """Read-only snapshot of one page configuration (e.g. `ASPX`, `XML`).
+
+    Edit configurations on the `pageConfigurationSet` asset and regions on the
+    `template` asset. Any assignment or deletion raises
+    `ReadOnlyPageConfigError`. See `PageRegion` for why Cascade's own flags
+    must not be trusted.
+    """
 
     name: str
-    page_regions: list[PageRegion] = Field(
-        validation_alias="pageRegions", serialization_alias="pageRegions"
+    default_configuration: bool | None = Field(
+        default=None, validation_alias="defaultConfiguration", serialization_alias="defaultConfiguration"
     )
+    template_id: str | None = Field(
+        default=None, validation_alias="templateId", serialization_alias="templateId"
+    )
+    template_path: str | None = Field(
+        default=None, validation_alias="templatePath", serialization_alias="templatePath"
+    )
+    format_recycled: bool | None = Field(
+        default=None, validation_alias="formatRecycled", serialization_alias="formatRecycled"
+    )
+    page_regions: tuple[PageRegion, ...] = Field(
+        default=(), validation_alias="pageRegions", serialization_alias="pageRegions"
+    )
+    include_xml_declaration: bool | None = Field(
+        default=None, validation_alias="includeXMLDeclaration", serialization_alias="includeXMLDeclaration"
+    )
+    publishable: bool | None = None
+    id: str | None = None
 
     def __setattr__(self, key: str, value: object) -> None:
-        if key == "name":
-            raise AttributeError(
-                "PageConfiguration.name is read-only; only region content "
-                "can be edited"
-            )
-        super().__setattr__(key, value)
+        raise ReadOnlyPageConfigError(CONFIGURATION_READ_ONLY_MESSAGE)
+
+    def __delattr__(self, key: str) -> None:
+        raise ReadOnlyPageConfigError(CONFIGURATION_READ_ONLY_MESSAGE)
+
+
+_page_configuration_adapter: TypeAdapter[PageConfiguration] = TypeAdapter(
+    PageConfiguration
+)
 
 
 def _build_page_views(raw_configs: list[dict[str, Any]]) -> list[PageConfiguration]:
-    """Parse raw `pageConfigurations` dicts into models that write through.
+    """Parse raw `pageConfigurations` dicts into read-only snapshots.
 
-    Each region model keeps a reference to its raw dict, so assigning
-    `content` updates the data `AssetAdapter.dump_json` serializes.
+    Raises pydantic ValidationError on a malformed configuration.
     """
-    views: list[PageConfiguration] = []
-    for raw_config in raw_configs:
-        config = PageConfiguration(**raw_config)
-        for region, raw_region in zip(config.page_regions, raw_config["pageRegions"]):
-            region._raw = raw_region
-        views.append(config)
-    return views
+    return [_page_configuration_adapter.validate_python(c) for c in raw_configs]
 
 
 """
@@ -653,7 +715,8 @@ class Asset:
     type when reassigned (it does not validate against a schema).
     `pageConfigurations`, if present, is parsed into `PageConfiguration`
     models up front (failing fast on a malformed one) for access via
-    `get_page_configuration`, which writes region `content` through.
+    `get_page_configuration`. Those views are read-only snapshots: region
+    and configuration edits are not sent on `edit()`.
     """
 
     _asset_type: str
@@ -677,6 +740,8 @@ class Asset:
         if key.startswith("_"):
             object.__setattr__(self, key, value)
             return
+        if key == "pageConfigurations":
+            raise ReadOnlyPageConfigError(CONFIGURATION_READ_ONLY_MESSAGE)
         if key in self._data:
             current = self._data[key]
             if type(value) is not type(current):
@@ -773,18 +838,16 @@ class Asset:
         """
         Find a page configuration and optionally a specific region within it.
 
-        The returned models are live views of this asset's data, rebuilt from
-        the current data on every call, so raw edits and reassigning
-        `pageConfigurations` are visible. Assigning a region's `content`
-        (validated: `str | None`) is written into the asset and sent on edit.
+        The returned models are read-only snapshots of the asset's current
+        data, rebuilt on every call. Assigning to them (or to
+        `pageConfigurations`) raises `ReadOnlyPageConfigError`: Cascade ignores
+        region edits sent through `edit()`. Edit configurations on the
+        `pageConfigurationSet` asset and regions on the `template` asset.
 
-        Limits: only `content` writes through; assigning `name` on a region or
-        configuration raises AttributeError. Appending to or removing from a
-        `page_regions` list is not propagated, and no configuration or region
-        is ever created. A misspelled name returns None, so an edit that then
-        changes nothing still succeeds; guard against None before editing.
-        Raises pydantic ValidationError if the raw data is malformed, and
-        KeyError if required fields (name, pageRegions) are missing.
+        Do not trust Cascade's `noBlock`/`noFormat` flags; they can read
+        `false` on regions with no block/format ids or paths. A misspelled
+        name returns None. Raises pydantic ValidationError if the raw data is
+        malformed.
 
         Args:
             configuration_name: The 'name' of the configuration e.g. 'ASPX', 'XML'

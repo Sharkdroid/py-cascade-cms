@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.7.0]
+
+### Changed (breaking)
+- **`PageRegion` and `PageConfiguration` are now read-only pydantic dataclasses** shaped by Cascade's real payloads (region: `name`, `block_id`/`block_path`/`block_recycled`/`no_block`, `format_id`/`format_path`/`format_recycled`/`no_format`, `id`; configuration: `name`, `default_configuration`, `template_id`, `template_path`, `format_recycled`, `page_regions` (a tuple, may be empty), `include_xml_declaration`, `publishable`, `id`). The 3.6.0 write-through and the `content` field are removed: Cascade ignores region edits sent through `edit()`.
+- Assigning to or deleting any attribute, or assigning `asset.pageConfigurations`, raises the new `ReadOnlyPageConfigError` (an `AttributeError`) pointing at where the edit belongs: the `template` asset's `pageRegions` for regions, the `pageConfigurationSet` asset's `pageConfiguration` for configurations.
+
+### Documented
+- Cascade's own response fields cannot be trusted: `noBlock`/`noFormat` came back `false` on regions whose `blockId`/`blockPath`/`formatId`/`formatPath` had been removed. Check the ids/paths themselves (see `AGENTS.md`).
+
+**Files changed:** `src/cascade_cms/cmstypes.py`, `tests/test_page_configurations.py`, `AGENTS.md`, `CHANGELOG.md`, `pyproject.toml`
+
 ## [3.6.0]
 
 ### Fixed

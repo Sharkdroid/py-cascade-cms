@@ -46,6 +46,18 @@ here needs to stay in sync with them beyond tagging a release.
   `cascade_cms.operation_logger` and `cascade_cms.redaction` no longer exist (no shim); `from cascade_cms import OperationLogger` still works.
 - The API bearer token is masked (`cascade_cms.utils.redaction.mask_token`) wherever it could surface.
 
+## Cascade API quirks
+
+- **Page regions are read-only through the API.** Edits to a page's `pageRegions` sent via
+  `edit()` are ignored by Cascade. Regions are changed on the `template` asset (`pageRegions`);
+  page configurations on the `pageConfigurationSet` asset (`pageConfiguration`). `PageRegion`
+  and `PageConfiguration` are read-only snapshots and raise `ReadOnlyPageConfigError` on any
+  assignment.
+- **Do not trust Cascade's response fields blindly.** With `blockId`/`blockPath` and
+  `formatId`/`formatPath` removed from a region, Cascade still returned `noBlock: false` and
+  `noFormat: false`. Derive "has a block/format" from the ids/paths, not the flags, and verify
+  surprising state against the live server.
+
 ## Maintaining the CHANGELOG
 
 Each section in `CHANGELOG.md` should include a note at the bottom listing
