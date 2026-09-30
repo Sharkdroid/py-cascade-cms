@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.8.2]
+
+### Changed (breaking)
+- `Asset.get_data_structure` group paths are tuples: `("accordion", "row")`. The dotted-string form added in 3.8.1 is removed, because Cascade identifiers can contain dots and 3.8.1 broke lookups of such groups. A `str` is now always exactly one identifier. Migration: `"a.b"` -> `("a", "b")`. A list raises `TypeError`; an empty tuple or an empty/non-str part raises `ValueError`.
+- The docstring now recommends `direct=True` with a tuple path: the default depth-first search can return a nested group's field instead of the group's own, and the result count cannot reveal it.
+
+### Fixed
+- `get_data_structure` finds groups whose identifier contains a dot again (regression in 3.8.1).
+
+**Files changed:** `src/cascade_cms/cmstypes.py`, `tests/test_get_data_structure.py`, `CHANGELOG.md`, `pyproject.toml`
+
 ## [3.8.1]
 
 ### Added

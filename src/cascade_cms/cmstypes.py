@@ -797,7 +797,7 @@ class Asset:
 
     def get_data_structure(
         self: 'Asset',
-        group: str,
+        group: str | tuple[str, ...],
         identifier: str,
         *,
         direct: bool = False,
@@ -807,11 +807,13 @@ class Asset:
         Returns first match per group instance as a list of node objects by reference.
         Raises KeyError if required fields (identifier, structuredDataNodes) are missing.
 
-        `group` is a group identifier or a dotted path of group identifiers
-        (`"accordion.row"`). A bare identifier matches every group with that
-        identifier, wherever it sits. A dotted path matches only groups whose
-        chain of enclosing groups ends with that path, so `"accordion.row"`
-        skips a `row` under `tabs`. Cascade identifiers contain no dots.
+        `group` is a str, which is exactly one group identifier (dots are part
+        of the identifier, e.g. `"v1.0"`), or a tuple of identifiers, a path
+        ending at the group (`("accordion", "row")`). A bare identifier matches
+        every group with that identifier, wherever it sits. A tuple matches
+        only groups whose chain of enclosing groups ends with those parts, so
+        `("accordion", "row")` skips a `row` under `tabs`. A list is rejected
+        (TypeError); an empty tuple or an empty/non-str part raises ValueError.
 
         By default the search inside each matched group is depth-first and
         descends into nested groups, so a group that lacks `identifier`
@@ -822,9 +824,22 @@ class Asset:
         checked and nested groups are never entered. A group instance without
         the field directly is skipped, and the result is None when no
         instance has it, as in the default mode.
+
+        Prefer `direct=True` with a tuple path. The default search can return
+        a nested group's field instead of the group's own (when the nested
+        group comes first, or the group lacks the field), and the result
+        count cannot reveal it.
         """
-        parts = tuple(group.split("."))
-        if not all(parts):
+        if isinstance(group, str):
+            parts: tuple[str, ...] = (group,)
+        elif isinstance(group, tuple):
+            parts = group
+        else:
+            raise TypeError(
+                "group must be a str or a tuple of str, "
+                f"not {type(group).__name__}"
+            )
+        if not parts or not all(isinstance(p, str) and p for p in parts):
             raise ValueError(f"Invalid group path {group!r}")
 
         def find_group(obj, trail=()):
