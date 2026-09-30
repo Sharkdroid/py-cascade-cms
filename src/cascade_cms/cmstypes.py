@@ -1142,10 +1142,9 @@ class AssetAdapter:
         return Asset(json.loads(json_str))
 
     def dump_json(self, asset: Asset) -> bytes:
-        # `_data` is what gets serialized. The `_page_configs` models only
-        # cover `name`/`pageRegions[].content`; a region's `content`
-        # assignment writes through to its raw dict in `_data`. The raw dicts
-        # also keep fields the models don't parse (templateId, blockId,
+        # `_data` is what gets serialized. The `_page_configs` models are
+        # read-only snapshots and are never written back. The raw dicts keep
+        # every field the models don't parse (templateId, blockId,
         # formatId, ...), so round-tripping preserves them.
         data = {**asset._data}
         reconstructed = {"asset": {asset._asset_type: data}}

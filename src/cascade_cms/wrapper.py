@@ -2,7 +2,9 @@ import asyncio
 import os
 import sys
 from concurrent.futures import Executor
-from typing import Any, TypedDict, TypeVar, overload
+from contextvars import Token
+from types import TracebackType
+from typing import Any, Literal, Self, TypedDict, TypeVar, overload
 
 from .cmstypes import CascadeObjects
 from .driver import CascadeCMSRestDriver
@@ -50,9 +52,9 @@ class CascadeWrapperBase:
             # results.success / results.failed — no isinstance() checks needed.
     """
 
-    def __enter__(self):
+    def __enter__(self) -> Self:
         # Route `script_log.note()` to this run for the life of the block.
-        self._run_token = activate(
+        self._run_token: Token[ActiveRun | None] | None = activate(
             ActiveRun(self._logger, getattr(self, "_api_key", ""))
         )
         return self
@@ -109,7 +111,12 @@ class CascadeWrapperBase:
             os.path.basename(sys.argv[0]),
         )
 
-    def __exit__(self, exc_type, exc_value, traceback):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> Literal[False]:
         """Run cleanup, then decide how (or whether) to propagate.
 
         Cleanup (log_exit + driver.close) always runs first, exactly as

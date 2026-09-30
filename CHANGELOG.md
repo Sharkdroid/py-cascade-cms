@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.8.0]
+
+### Changed
+- `CascadeWrapperBase.__enter__` is annotated `-> Self` and `__exit__` `-> Literal[False]` (it never swallows an exception). Type checkers now see `with ... as cascade` as a `CascadeWrapperBase` instead of `Any`. Annotations only; no runtime change. This can surface previously hidden typing errors in typed scripts, since `cascade` and everything derived from it now carry real signatures.
+
+### Fixed
+- Corrected the stale comment in `AssetAdapter.dump_json`: it claimed a region's `content` assignment wrote through to `_data`. There is no `content` and no write-through; the page-configuration models are read-only snapshots and are never written back.
+
+### Known typing limitation
+- Multi-identifier `Operations` methods annotate their argument as `IdentifierType | Path | list[IdentifierType | Path]`. With `cascade` typed, passing a `list[IdentifierType]` gets a false `[arg-type]` error from mypy (list invariance). At runtime only a real `list` is accepted. Not changed here; a proper fix (e.g. TypeVar-based signatures) needs a separate design.
+
+**Files changed:** `src/cascade_cms/wrapper.py`, `src/cascade_cms/cmstypes.py`, `tests/test_wrapper_typing.py`, `CHANGELOG.md`, `pyproject.toml`
+
 ## [3.7.1]
 
 ### Changed
