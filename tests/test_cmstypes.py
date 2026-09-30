@@ -364,3 +364,26 @@ def test_workflow_action_next_id_alias():
             {"identifier": "a", "label": "l", "actionType": "t", key: nid}
         )
         assert action.next_id.hex == nid
+
+
+class TestAssetGetWarning:
+    @staticmethod
+    def _asset() -> Asset:
+        return Asset({"asset": {"page": {"structuredData": {}, "pageConfigurations": []}}})
+
+    def test_structured_data_warning_names_accessor(self):
+        with pytest.warns(UserWarning, match=r"get_data_structure\(group") as caught:
+            self._asset().get("structuredData")
+        assert caught[0].filename == __file__
+
+    def test_page_configurations_warning_names_accessor_and_read_only(self):
+        with pytest.warns(UserWarning, match=r"read-only.*get_page_configuration") as caught:
+            self._asset().get("pageConfigurations")
+        assert caught[0].filename == __file__
+
+    def test_other_keys_do_not_warn(self):
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            Asset({"asset": {"page": {"name": "n"}}}).get("name")

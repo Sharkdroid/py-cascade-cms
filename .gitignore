@@ -32,3 +32,6 @@ cache/
 
 # OS
 .DS_Store
+
+# Handoff notes
+handoff*.txt

@@ -2,7 +2,7 @@ import asyncio
 import contextvars
 import os
 import traceback
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from concurrent.futures import Executor, ProcessPoolExecutor
 from dataclasses import dataclass, field
 from functools import partial
@@ -47,6 +47,22 @@ from .cmstypes import (
 from .driver import CascadeCMSRestDriver, RequestExecutor
 from .failures import ChainFailure, FailureCategory, classify_failure
 from .utils.operation_logger import ChainLineBuilder, OperationLogger
+
+
+def _split_identifiers(value: Any) -> IdentifierType | Path | list[IdentifierType | Path]:
+    """Normalise a multi-identifier argument: one identifier, or a list of them.
+
+    Any `Sequence` (list or tuple) becomes a list; `str`/`bytes` and
+    non-sequences raise `TypeError` instead of failing obscurely later.
+    """
+    if isinstance(value, IdentifierType | Path):
+        return value
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes):
+        return list(value)
+    raise TypeError(
+        "expected an IdentifierType, a Path or a list/tuple of them, "
+        f"not {type(value).__name__}"
+    )
 
 
 def _in_current_context(executor: Executor | None, fn: Callable[[Any], Any]) -> Callable[[Any], Any]:
@@ -349,7 +365,7 @@ class OperationChain:
         self,
         identifier: IdentifierType
         | Path
-        | Callable[[Any], IdentifierType | Path | list[IdentifierType | Path]],
+        | Callable[[Any], IdentifierType | Path | Sequence[IdentifierType | Path]],
         payload: deleteParameters | None = None,
         parser=parse_success,
     ) -> Self:
@@ -387,6 +403,7 @@ class OperationChain:
     ) -> list[RequestExecutor]:
         """Build the delete requests from a callable's resolved identifier(s)."""
         resolved = resolver(previous)
+        resolved = _split_identifiers(resolved)
         identifiers = resolved if isinstance(resolved, list) else [resolved]
         if self._asset_identifier is None and identifiers:
             self._asset_identifier = identifiers[0]
@@ -1242,7 +1259,7 @@ class Operations:
 
     def read(
         self,
-        identifiers: IdentifierType | Path | list[IdentifierType | Path],
+        identifiers: IdentifierType | Path | Sequence[IdentifierType | Path],
         parser=parse_assets,
     ) -> OperationChain | ChainGroup:
         """Start a chain with GET `read/{type}/{id-or-path}` for one or more assets.
@@ -1250,6 +1267,7 @@ class Operations:
         A list of identifiers returns a `ChainGroup` of independent chains,
         one per identifier (Approach A) — see the class docstring.
         """
+        identifiers = _split_identifiers(identifiers)
         if isinstance(identifiers, list):
             return self._new_chains_for(
                 identifiers, lambda chain, ident: chain.read(ident, parser)
@@ -1258,11 +1276,12 @@ class Operations:
 
     def delete(
         self,
-        identifier: IdentifierType | Path | list[IdentifierType | Path],
+        identifier: IdentifierType | Path | Sequence[IdentifierType | Path],
         payload: deleteParameters | None = None,
         parser=parse_success,
     ) -> OperationChain | ChainGroup:
         """Start a chain with POST `delete/{type}/{id-or-path}` for one or more assets."""
+        identifier = _split_identifiers(identifier)
         if isinstance(identifier, list):
             return self._new_chains_for(
                 identifier, lambda chain, ident: chain.delete(ident, payload, parser)
@@ -1283,11 +1302,12 @@ class Operations:
 
     def copy(
         self,
-        identifier: IdentifierType | Path | list[IdentifierType | Path],
+        identifier: IdentifierType | Path | Sequence[IdentifierType | Path],
         payload: copyParameters,
         parser=parse_success,
     ) -> OperationChain | ChainGroup:
         """Start a chain with POST `copy/{type}/{id-or-path}` for one or more assets."""
+        identifier = _split_identifiers(identifier)
         if isinstance(identifier, list):
             return self._new_chains_for(
                 identifier, lambda chain, ident: chain.copy(ident, payload, parser)
@@ -1296,11 +1316,12 @@ class Operations:
 
     def move(
         self,
-        identifier: IdentifierType | Path | list[IdentifierType | Path],
+        identifier: IdentifierType | Path | Sequence[IdentifierType | Path],
         payload: moveParameters,
         parser=parse_success,
     ) -> OperationChain | ChainGroup:
         """Start a chain with POST `move/{type}/{id-or-path}` to move/rename assets."""
+        identifier = _split_identifiers(identifier)
         if isinstance(identifier, list):
             return self._new_chains_for(
                 identifier, lambda chain, ident: chain.move(ident, payload, parser)
@@ -1309,11 +1330,12 @@ class Operations:
 
     def publish(
         self,
-        identifier: IdentifierType | Path | list[IdentifierType | Path],
+        identifier: IdentifierType | Path | Sequence[IdentifierType | Path],
         payload: None | publishInformation = None,
         parser=parse_success,
     ) -> OperationChain | ChainGroup:
         """Start a chain with POST `publish/{type}/{id-or-path}` for one or more assets."""
+        identifier = _split_identifiers(identifier)
         if isinstance(identifier, list):
             return self._new_chains_for(
                 identifier, lambda chain, ident: chain.publish(ident, payload, parser)
@@ -1331,11 +1353,12 @@ class Operations:
     # -------Asset Controls-------
     def checkIn(
         self,
-        identifier: IdentifierType | Path | list[IdentifierType | Path],
+        identifier: IdentifierType | Path | Sequence[IdentifierType | Path],
         payload: Comment,
         parser=parse_success,
     ) -> OperationChain | ChainGroup:
         """Start a chain with POST `checkIn/{type}/{id-or-path}` for one or more assets."""
+        identifier = _split_identifiers(identifier)
         if isinstance(identifier, list):
             return self._new_chains_for(
                 identifier, lambda chain, ident: chain.checkIn(ident, payload, parser)
@@ -1344,10 +1367,11 @@ class Operations:
 
     def checkOut(
         self,
-        identifier: IdentifierType | Path | list[IdentifierType | Path],
+        identifier: IdentifierType | Path | Sequence[IdentifierType | Path],
         parser=parse_checked_out_asset,
     ) -> OperationChain | ChainGroup:
         """Start a chain with POST `checkOut/{type}/{id-or-path}` for one or more assets."""
+        identifier = _split_identifiers(identifier)
         if isinstance(identifier, list):
             return self._new_chains_for(
                 identifier, lambda chain, ident: chain.checkOut(ident, parser)
@@ -1368,10 +1392,11 @@ class Operations:
 
     def listSubscribers(
         self,
-        identifier: IdentifierType | Path | list[IdentifierType | Path],
+        identifier: IdentifierType | Path | Sequence[IdentifierType | Path],
         parser=parse_list_elements,
     ) -> OperationChain | ChainGroup:
         """Start a chain with GET `listSubscribers/{type}/{id-or-path}` for one or more assets."""
+        identifier = _split_identifiers(identifier)
         if isinstance(identifier, list):
             return self._new_chains_for(
                 identifier, lambda chain, ident: chain.listSubscribers(ident, parser)
@@ -1388,10 +1413,11 @@ class Operations:
 
     def readAccessRights(
         self,
-        identifier: IdentifierType | Path | list[IdentifierType | Path],
+        identifier: IdentifierType | Path | Sequence[IdentifierType | Path],
         parser=parse_access_rights,
     ) -> OperationChain | ChainGroup:
         """Start a chain with GET `readAccessRights/{type}/{id-or-path}` for one or more assets."""
+        identifier = _split_identifiers(identifier)
         if isinstance(identifier, list):
             return self._new_chains_for(
                 identifier, lambda chain, ident: chain.readAccessRights(ident, parser)

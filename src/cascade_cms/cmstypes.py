@@ -4,6 +4,7 @@ import warnings
 from collections.abc import Callable
 from datetime import datetime
 from typing import (
+    TYPE_CHECKING,
     Annotated,
     Any,
     ClassVar,
@@ -13,6 +14,7 @@ from typing import (
     Self,
     TypeVar,
     cast,
+    overload,
 )
 
 from pydantic import (
@@ -330,6 +332,22 @@ class NewAsset(SimplePayload):
     parent_folder_path: str | None = Field(default=None, validation_alias="parentFolderPath", serialization_alias="parentFolderPath")
     parent_folder_id: uuid.UUID | None = Field(default=None, validation_alias="parentFolderId", serialization_alias="parentFolderId")
 
+    if TYPE_CHECKING:
+        # Typing only, absent at runtime (pydantic's own __init__ runs). Extra
+        # fields are allowed and passed through, and the alias spellings
+        # (siteName, ...) are accepted, so unknown keywords are Any.
+        def __init__(
+            self,
+            *,
+            name: str,
+            asset_type: AssetTypes,
+            site_name: str | None = None,
+            site_id: uuid.UUID | str | None = None,
+            parent_folder_path: str | None = None,
+            parent_folder_id: uuid.UUID | str | None = None,
+            **extra: Any,
+        ) -> None: ...
+
     @field_serializer("site_id", "parent_folder_id")
     def serialize_uuid_as_hex(self, value: uuid.UUID | None) -> str | None:
         return value.hex if value is not None else None
@@ -378,6 +396,30 @@ class IdentifierType(BaseModel):
     asset_type: Annotated[AssetTypes, Field(default=..., validation_alias="type", serialization_alias="type")]
     recycled: Annotated[bool | None, Field(default=None)] = None
     path: Annotated[PathBase | None, Field(default=None)] = None
+
+    if TYPE_CHECKING:
+        # Typing only, absent at runtime: pydantic accepts Cascade's key names
+        # (id, type) and the field names, but type checkers cannot see
+        # validation_alias.
+        @overload
+        def __init__(
+            self,
+            *,
+            id: uuid.UUID | str,
+            type: AssetTypes,
+            recycled: bool | None = None,
+            path: PathBase | dict[str, Any] | None = None,
+        ) -> None: ...
+        @overload
+        def __init__(
+            self,
+            *,
+            identifier: uuid.UUID | str,
+            asset_type: AssetTypes,
+            recycled: bool | None = None,
+            path: PathBase | dict[str, Any] | None = None,
+        ) -> None: ...
+        def __init__(self, **data: Any) -> None: ...
 
     # Cascade rejects dashed UUIDs for identifiers - serialize as bare hex.
     @field_serializer("identifier")
@@ -777,7 +819,20 @@ class Asset:
         keys = key.split(".")
 
         if keys[0] in ("structuredData", "pageConfigurations"):
-            warnings.warn("Use the designated functions for structuredData and ...")
+            if keys[0] == "structuredData":
+                message = (
+                    "asset.get('structuredData...') returns raw structured data. "
+                    "To address one field use asset.get_data_structure(group, "
+                    "identifier, direct=True)."
+                )
+            else:
+                message = (
+                    "asset.get('pageConfigurations...') returns raw page "
+                    "configuration data, which is read-only (Cascade drops "
+                    "edits to it). To read a configuration or region use "
+                    "asset.get_page_configuration(name, region)."
+                )
+            warnings.warn(message, stacklevel=2)
         if len(keys) > max_depth:
             raise ValueError(f"{key} exceeds max depth of {max_depth}")
 
@@ -883,6 +938,14 @@ class Asset:
 
         return matches if matches else None
 
+    @overload
+    def get_page_configuration(
+        self, configuration_name: str, page_region: None = None
+    ) -> PageConfiguration | None: ...
+    @overload
+    def get_page_configuration(
+        self, configuration_name: str, page_region: str
+    ) -> PageRegion | None: ...
     def get_page_configuration(
         self, configuration_name: str, page_region: str | None = None
     ) -> PageConfiguration | PageRegion | None:

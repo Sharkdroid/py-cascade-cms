@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.8.3]
+
+### Changed
+- The multi-identifier `Operations` methods (`read`, `delete`, `copy`, `move`, `publish`, `checkIn`, `checkOut`, `listSubscribers`, `readAccessRights`) accept any `Sequence` of identifiers, so a tuple works wherever a list did. Anything else that is not an `IdentifierType` or `Path` (`str`, `bytes`, `int`, `None`, ...) now raises a clear `TypeError` instead of failing obscurely later. A callable passed to `delete()` may likewise return a tuple.
+- `Asset.get_page_configuration` is overloaded: without `page_region` it returns `PageConfiguration | None`, with one it returns `PageRegion | None`. Typing only, no runtime change.
+- `Asset.get`'s warning for `structuredData` / `pageConfigurations` now names the accessor to use (`get_data_structure(..., direct=True)` / `get_page_configuration`, noting the latter is read-only) and points at the caller's line.
+- Typing-only `__init__` stubs (under `TYPE_CHECKING`) on `IdentifierType` and `NewAsset`, so type checkers accept Cascade's key names (`id=`, `type=`) as well as the field names, and `NewAsset`'s extra fields. Absent at runtime.
+
+### Fixed
+- False `[arg-type]` errors on `read` / `publish` / ... with a `list[IdentifierType]` (the "Known typing limitation" noted in 3.8.0), the `[union-attr]` on region attributes, and ~59 false `[call-arg]` errors on `IdentifierType(id=..., type=...)` and `NewAsset(..., metadata=...)`. No runtime change for the stubs.
+
+**Files changed:** `src/cascade_cms/operations.py`, `src/cascade_cms/cmstypes.py`, `tests/test_identifier_sequences.py`, `tests/test_identifier_typing.py`, `tests/test_init_stubs_drift.py`, `tests/test_cmstypes.py`, `CHANGELOG.md`, `pyproject.toml`
+
 ## [3.8.2]
 
 ### Changed (breaking)
