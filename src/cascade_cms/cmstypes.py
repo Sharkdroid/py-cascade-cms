@@ -795,22 +795,50 @@ class Asset:
             return recursive(data[cur_search_node], index=index + 1)
         return recursive(self._data)
 
-    def get_data_structure(self: 'Asset', group: str, identifier: str) -> list[dict[str, Any]] | None:
+    def get_data_structure(
+        self: 'Asset',
+        group: str,
+        identifier: str,
+        *,
+        direct: bool = False,
+    ) -> list[dict[str, Any]] | None:
         """
         Find nodes matching identifier within all instances of a group.
         Returns first match per group instance as a list of node objects by reference.
         Raises KeyError if required fields (identifier, structuredDataNodes) are missing.
-        """
 
-        def find_group(obj):
+        `group` is a group identifier or a dotted path of group identifiers
+        (`"accordion.row"`). A bare identifier matches every group with that
+        identifier, wherever it sits. A dotted path matches only groups whose
+        chain of enclosing groups ends with that path, so `"accordion.row"`
+        skips a `row` under `tabs`. Cascade identifiers contain no dots.
+
+        By default the search inside each matched group is depth-first and
+        descends into nested groups, so a group that lacks `identifier`
+        itself can match a field of a nested group. Returns None when nothing
+        matches.
+
+        With `direct=True` only the matched group's own leaf children are
+        checked and nested groups are never entered. A group instance without
+        the field directly is skipped, and the result is None when no
+        instance has it, as in the default mode.
+        """
+        parts = tuple(group.split("."))
+        if not all(parts):
+            raise ValueError(f"Invalid group path {group!r}")
+
+        def find_group(obj, trail=()):
             if isinstance(obj, dict):
-                if obj.get("type") == "group" and obj.get("identifier") == group:
-                    yield obj
+                here = trail
+                if obj.get("type") == "group":
+                    here = trail + (obj.get("identifier"),)
+                    if here[-len(parts):] == parts:
+                        yield obj
                 for value in obj.values():
-                    yield from find_group(value)
+                    yield from find_group(value, here)
             elif isinstance(obj, list):
                 for item in obj:
-                    yield from find_group(item)
+                    yield from find_group(item, trail)
 
         def find_in_nodes(nodes):
             for node in nodes:
@@ -820,7 +848,7 @@ class Asset:
                         and "structuredDataNodes" not in node
                     ):
                         return node
-                    if "structuredDataNodes" in node:
+                    if not direct and "structuredDataNodes" in node:
                         result = find_in_nodes(node["structuredDataNodes"])
                         if result:
                             return result

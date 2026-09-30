@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.8.1]
+
+### Added
+- `Asset.get_data_structure` accepts a dotted group path. `"accordion.row"` matches only `row` groups whose chain of enclosing groups ends with `accordion`, so it no longer also matches a `row` under `tabs`. A bare identifier still matches every group with that identifier, exactly as before.
+- `Asset.get_data_structure(..., direct=True)` (keyword-only) checks only each matched group's own leaf children and never enters nested groups. A group instance without the field directly is skipped, and the result is `None` when no instance has it, same as the default mode. Use it with an exact group path to get one node per instance and no nested-group matches.
+
+### Unchanged
+- The default search is still depth-first and first-match per group instance, and a miss returns `None` in both modes. With the default, a group that lacks the field itself can still return a nested group's field (e.g. `("column", "title")` returning `column.video.title`); use `direct=True` to avoid that. Checked against the previous implementation on 5000 random trees: identical results.
+
+**Files changed:** `src/cascade_cms/cmstypes.py`, `tests/test_get_data_structure.py`, `CHANGELOG.md`, `pyproject.toml`
+
 ## [3.8.0]
 
 ### Changed
