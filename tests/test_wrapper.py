@@ -16,6 +16,7 @@ from pydantic import ValidationError
 
 from cascade_cms import Cascade
 from cascade_cms.cmstypes import CascadeError, CascadeSuccess, IdentifierType
+from cascade_cms.operations import Operations
 from cascade_cms.utils.failures import (
     CascadeBatchError,
     ChainFailure,
@@ -23,7 +24,6 @@ from cascade_cms.utils.failures import (
     FailureCategory,
     classify_failure,
 )
-from cascade_cms.operations import Operations
 from cascade_cms.utils.operation_logger import OperationLogger
 
 ID_ONE = "8b320f55ac1001062545a6d2562cee4b"

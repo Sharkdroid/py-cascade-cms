@@ -8,6 +8,8 @@ from typing import Any, Literal, Self, TypedDict, TypeVar, overload
 
 from .cmstypes import CascadeObjects
 from .driver import CascadeCMSRestDriver
+from .operations import OperationChain, Operations
+from .utils.extension import ActiveRun, activate, deactivate
 from .utils.failures import (
     CascadeBatchError,
     ChainFailure,
@@ -15,9 +17,7 @@ from .utils.failures import (
     FailureCategory,
     classify_failure,
 )
-from .operations import OperationChain, Operations
 from .utils.operation_logger import OperationLogger
-from .utils.extension import ActiveRun, activate, deactivate
 
 T = TypeVar("T")
 
