@@ -11,7 +11,7 @@ import pytest
 from test_wrapper import ID_ONE, StubDriver, make_asset, make_wrapper
 
 from cascade_cms.cmstypes import CascadeError, IdentifierType
-from cascade_cms.failures import CascadeBatchError
+from cascade_cms.utils.failures import CascadeBatchError
 from cascade_cms.utils.operation_logger import OperationLogger
 
 
@@ -219,10 +219,10 @@ def test_explicit_log_dir_beats_debug_config(tmp_path):
 
 
 def test_wrapper_passes_log_dir_to_logger(tmp_path, monkeypatch):
-    from cascade_cms import CascadeWrapperBase
+    from cascade_cms import Cascade
 
     monkeypatch.chdir(tmp_path)
     env = {"SERVER": "T", "API_KEY": "k", "CASCADE_URL": "http://127.0.0.1:1"}
-    with CascadeWrapperBase(env, log_dir=tmp_path / "custom") as cascade:
+    with Cascade(env, log_dir=tmp_path / "custom") as cascade:
         assert cascade._logger.log_path.parent == tmp_path / "custom"
     assert not (tmp_path / "logs").exists()

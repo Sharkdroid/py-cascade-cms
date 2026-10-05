@@ -45,7 +45,7 @@ from .cmstypes import (
     workflowTransitionInformation,
 )
 from .driver import CascadeCMSRestDriver, RequestExecutor
-from .failures import ChainFailure, FailureCategory, classify_failure
+from .utils.failures import ChainFailure, FailureCategory, classify_failure
 from .utils.operation_logger import ChainLineBuilder, OperationLogger
 
 

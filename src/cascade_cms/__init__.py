@@ -8,9 +8,12 @@ payload/response models, and an OperationLogger for console/logfile output.
 from .driver import CascadeCMSRestDriver, RequestExecutor
 from .operations import Node, OperationChain, Operations
 from .utils.operation_logger import OperationLogger
-from .wrapper import CascadeWrapperBase
+from .wrapper import Cascade
+
+CascadeWrapperBase = Cascade
 
 __all__ = [
+    "Cascade",
     "CascadeCMSRestDriver",
     "CascadeWrapperBase",
     "Node",

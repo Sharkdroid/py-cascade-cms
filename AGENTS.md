@@ -28,7 +28,7 @@ here needs to stay in sync with them beyond tagging a release.
 
 ## Logging and console output
 
-- `CascadeWrapperBase(environmentVariables, debug=None, *, exit_on_failure=True,
+- `Cascade(environmentVariables, debug=None, *, exit_on_failure=True,
   log_dir=None)` — there is no response cache and no `configurationVariables`.
 - Status lines (`[INIT]`, `[LOG]: <path>`, `[DONE]`, the tally, `[EXIT]`, console `[ERROR]`)
   go to **stderr**; stdout belongs to the caller's script.

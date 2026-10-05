@@ -1,6 +1,6 @@
 """
 Test suite for the D5/D8/D9 error-handling redesign: failure classification,
-`ChainResults`, `CascadeBatchError`, and `CascadeWrapperBase.__exit__`.
+`ChainResults`, `CascadeBatchError`, and `Cascade.__exit__`.
 """
 
 import asyncio
@@ -14,9 +14,9 @@ import aiohttp
 import pytest
 from pydantic import ValidationError
 
-from cascade_cms import CascadeWrapperBase
+from cascade_cms import Cascade
 from cascade_cms.cmstypes import CascadeError, CascadeSuccess, IdentifierType
-from cascade_cms.failures import (
+from cascade_cms.utils.failures import (
     CascadeBatchError,
     ChainFailure,
     ChainResults,
@@ -155,7 +155,7 @@ class StubDriver:
 
 
 def make_wrapper(driver, logger=None, exit_on_failure=True):
-    wrapper = object.__new__(CascadeWrapperBase)
+    wrapper = object.__new__(Cascade)
     wrapper._driver = driver
     wrapper._logger = logger if logger is not None else MagicMock(spec=OperationLogger)
     wrapper.operations = Operations(driver, _logger=wrapper._logger)
@@ -451,7 +451,7 @@ class TestRealProcessExitCode:
                 from tests.test_wrapper import StubDriver, make_wrapper
                 from cascade_cms.cmstypes import CascadeError
                 from cascade_cms.operations import Operations
-                from cascade_cms import CascadeWrapperBase
+                from cascade_cms import Cascade
 
                 driver = StubDriver([[CascadeError(message="denied")]])
                 wrapper = make_wrapper(driver)

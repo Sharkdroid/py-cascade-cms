@@ -1,7 +1,6 @@
 """Support modules: logging, token masking, the `script_log` note facade, and
 identifier coercion (`to_identifier`, `to_identifiers`)."""
 
-from .identifiers import to_identifier, to_identifiers
-from .script_notes import script_log
+from .extension import mask_token, script_log, to_identifier, to_identifiers
 
-__all__ = ["script_log", "to_identifier", "to_identifiers"]
+__all__ = ["mask_token", "script_log", "to_identifier", "to_identifiers"]

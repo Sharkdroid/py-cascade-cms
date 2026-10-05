@@ -12,7 +12,7 @@ from uuid import UUID
 
 import pytest
 
-from cascade_cms import CascadeWrapperBase
+from cascade_cms import Cascade
 from cascade_cms.cmstypes import (
     Asset,
     CascadeError,
@@ -943,10 +943,10 @@ class StubDriver:
 
 
 class TestWrapperIntegration:
-    """Test new chain architecture through CascadeWrapperBase."""
+    """Test new chain architecture through Cascade."""
 
     def test_wrapper_execute_chains(self):
-        """CascadeWrapperBase.submit_requests() executes chains properly."""
+        """Cascade.submit_requests() executes chains properly."""
         id1 = IdentifierType(id=ID_ONE, type="page")
         id2 = IdentifierType(id=ID_TWO, type="page")
         payload = make_asset(id=ID_ONE, name="Updated", path="/page-1")
@@ -959,7 +959,7 @@ class TestWrapperIntegration:
         driver = StubDriver([[asset1], [asset2], [edit_result]])
         logger = MagicMock(spec=OperationLogger)
 
-        wrapper = object.__new__(CascadeWrapperBase)
+        wrapper = object.__new__(Cascade)
         wrapper._driver = driver
         wrapper._logger = logger
         wrapper.operations = Operations(driver, _logger=logger)
@@ -990,7 +990,7 @@ class TestWrapperIntegration:
 
 
 # ============================================================================
-# End-to-end: real OperationLogger through StubDriver/CascadeWrapperBase
+# End-to-end: real OperationLogger through StubDriver/Cascade
 # ============================================================================
 
 def _read_logfile(logger: OperationLogger) -> list[str]:
@@ -1018,7 +1018,7 @@ class TestEndToEndLoggedOutput:
         driver = StubDriver([[asset], [CascadeSuccess()]])
         logger = OperationLogger(server="TESTSRV", debug_config={"log_dir": str(tmp_path)})
 
-        wrapper = object.__new__(CascadeWrapperBase)
+        wrapper = object.__new__(Cascade)
         wrapper._driver = driver
         wrapper._logger = logger
         wrapper.operations = Operations(driver, _logger=logger)
@@ -1050,7 +1050,7 @@ class TestEndToEndLoggedOutput:
         driver = StubDriver([[asset]])
         logger = OperationLogger(server="TESTSRV", debug_config={"log_dir": str(tmp_path)})
 
-        wrapper = object.__new__(CascadeWrapperBase)
+        wrapper = object.__new__(Cascade)
         wrapper._driver = driver
         wrapper._logger = logger
         wrapper.operations = Operations(driver, _logger=logger)
@@ -1099,7 +1099,7 @@ class TestEndToEndLoggedOutput:
         driver = StubDriver([[asset]])
         logger = OperationLogger(server="TESTSRV", debug_config={"log_dir": str(tmp_path)})
 
-        wrapper = object.__new__(CascadeWrapperBase)
+        wrapper = object.__new__(Cascade)
         wrapper._driver = driver
         wrapper._logger = logger
         wrapper.operations = Operations(driver, _logger=logger)

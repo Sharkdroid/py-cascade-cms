@@ -1,7 +1,7 @@
 from uuid import UUID
 
 from cascade_cms.cmstypes import Asset, CascadeError, CascadeSuccess, IdentifierType
-from cascade_cms.wrapper import CascadeWrapperBase, EnvironmentVars
+from cascade_cms.wrapper import Cascade, EnvironmentVars
 
 """
 Title: Manual Human test - read + modify + edit child assets of a folder
@@ -52,7 +52,7 @@ def change_displayname(single_asset: Asset) -> Asset:
     return single_asset
 
 try:
-    with CascadeWrapperBase(
+    with Cascade(
         environmentVariables=environmentConfig,
         debug=debug_config
     ) as cascade:

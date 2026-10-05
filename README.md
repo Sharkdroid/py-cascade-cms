@@ -8,7 +8,7 @@ A typed, async REST client for Hannon Hill Cascade CMS.
 
 ```python
 from cascade_cms.cmstypes import Asset, IdentifierType
-from cascade_cms.wrapper import CascadeWrapperBase
+from cascade_cms.wrapper import Cascade
 
 environment_variables = {
     "API_KEY": "...",
@@ -16,7 +16,7 @@ environment_variables = {
     "SERVER": "prod",  # label used for logfile naming
 }
 
-with CascadeWrapperBase(environment_variables) as cascade:
+with Cascade(environment_variables) as cascade:
     identifier = IdentifierType(identifier="e868f539ac1001062cfa029c4c5df4d0", asset_type="folder")
     cascade.operations.read(identifier)
     results = cascade.submit_requests(Asset)
@@ -43,7 +43,7 @@ def rewrite(asset):
     asset.keywords = "updated"
     return asset
 
-with CascadeWrapperBase(environment_variables) as cascade:
+with Cascade(environment_variables) as cascade:
     cascade.operations.read(page_a).edit(page_a, rewrite).publish(page_a)
     cascade.operations.read(page_b).then(report)
     cascade.operations.delete(old_page)
@@ -61,7 +61,7 @@ with CascadeWrapperBase(environment_variables) as cascade:
   list, in that same chain-creation order — with `.success` (results from chains that didn't fail)
   and `.failed` (a `ChainFailure` per failed chain, naming the exact step and its category) added.
   There's no need for an `isinstance(result, CascadeError)` check or a `try/except` around
-  `submit_requests()` — `CascadeWrapperBase` owns whether a failure ends the script; see
+  `submit_requests()` — `Cascade` owns whether a failure ends the script; see
   "Error handling" below.
 - **A callback returning `None`** passes the previous result through, so side-effect callbacks
   (logging, reporting) don't break the chain.
@@ -72,7 +72,7 @@ with CascadeWrapperBase(environment_variables) as cascade:
 
 ### Error handling
 
-Failure handling lives in the library, not in your script. `CascadeWrapperBase`'s context
+Failure handling lives in the library, not in your script. `Cascade`'s context
 manager owns it end to end:
 
 - No `try/except` around `submit_requests()`, and no `isinstance()` checks in your script —
@@ -98,7 +98,7 @@ manager owns it end to end:
   library itself (not from a callback-only failure). The tally is also written to the logfile.
 
 ```python
-with CascadeWrapperBase(environment_variables) as cascade:
+with Cascade(environment_variables) as cascade:
     cascade.operations.read(identifier)
     results = cascade.submit_requests(Asset)
     for asset in results.success:
@@ -129,7 +129,7 @@ assets = cascade.submit_requests(Asset).success
 
 ### Logging
 
-`CascadeWrapperBase` accepts an optional second `debug` argument. Leaving it as `None`
+`Cascade` accepts an optional second `debug` argument. Leaving it as `None`
 (the default) runs in **normal mode**: a minimal console (`[INIT]`/`[LOG]`/`[RUNNING]`/`n/N succeeded`/
 `[DONE]`/`[EXIT]`) plus a simple logfile at `./logs/{SERVER}_{timestamp}_{n}.log`. Passing a dict
 switches to **debug mode**: a quiet console and a verbose, nested logfile at
@@ -160,7 +160,7 @@ debug_config = {
     "response_line_limit": 8,   # -1 = dump full response body
 }
 
-with CascadeWrapperBase(environment_variables, debug=debug_config) as cascade:
+with Cascade(environment_variables, debug=debug_config) as cascade:
     ...
 ```
 
@@ -193,7 +193,7 @@ instead of capturing stdout:
   ```python
   from cascade_cms.utils import script_log
 
-  with CascadeWrapperBase(environment_variables) as cascade:
+  with Cascade(environment_variables) as cascade:
       script_log.note("will delete page 1a2b... /news/old-1")
   ```
 

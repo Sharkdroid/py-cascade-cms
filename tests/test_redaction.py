@@ -1,7 +1,7 @@
 import pathlib
 
+from cascade_cms.utils.extension import mask_token
 from cascade_cms.utils.operation_logger import OperationLogger
-from cascade_cms.utils.redaction import mask_token
 
 TOKEN = "supersecrettoken-abcd"
 

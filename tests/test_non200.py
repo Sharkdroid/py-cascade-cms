@@ -6,9 +6,9 @@ import threading
 import pytest
 from aiohttp import web
 
-from cascade_cms import CascadeWrapperBase
+from cascade_cms import Cascade
 from cascade_cms.cmstypes import CascadeError, IdentifierType
-from cascade_cms.failures import FailureCategory
+from cascade_cms.utils.failures import FailureCategory
 
 HTML = "<html><body>SECRET-TOMCAT-PAGE</body></html>"
 ID = "8b320f55ac1001062545a6d2562cee4b"
@@ -81,7 +81,7 @@ def test_non_200_is_cascade_failure(server, tmp_path, monkeypatch, code, reason)
         "API_KEY": "token-abcd",
         "CASCADE_URL": f"http://127.0.0.1:{port}",
     }
-    with CascadeWrapperBase(env, exit_on_failure=False) as cascade:
+    with Cascade(env, exit_on_failure=False) as cascade:
         cascade.operations.read(IdentifierType(id=ID, type="page"))
         results = cascade.submit_requests()
 

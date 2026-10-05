@@ -40,8 +40,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from ..failures import FailureCategory
-from .redaction import mask_token
+from .extension import mask_token
+from .failures import FailureCategory
 
 _CATEGORY_PREFIX = {
     FailureCategory.NETWORK: "[NETWORK] ",

@@ -8,7 +8,7 @@ from typing import Any, Literal, Self, TypedDict, TypeVar, overload
 
 from .cmstypes import CascadeObjects
 from .driver import CascadeCMSRestDriver
-from .failures import (
+from .utils.failures import (
     CascadeBatchError,
     ChainFailure,
     ChainResults,
@@ -17,20 +17,20 @@ from .failures import (
 )
 from .operations import OperationChain, Operations
 from .utils.operation_logger import OperationLogger
-from .utils.script_notes import ActiveRun, activate, deactivate
+from .utils.extension import ActiveRun, activate, deactivate
 
 T = TypeVar("T")
 
 
 class EnvironmentVars(TypedDict):
-    """Required keys for `CascadeWrapperBase`'s `environmentVariables` argument."""
+    """Required keys for `Cascade`'s `environmentVariables` argument."""
 
     SERVER: str
     API_KEY: str
     CASCADE_URL: str
 
 
-class CascadeWrapperBase:
+class Cascade:
     """Context-manager entry point tying together the logger, REST driver,
     and Operations builder for a single script/session.
 
@@ -46,7 +46,7 @@ class CascadeWrapperBase:
     stay available to the caller as values via `.success`/`.failed`.
 
     Use as:
-        with CascadeWrapperBase(env_vars) as cascade:
+        with Cascade(env_vars) as cascade:
             cascade.operations.read(identifier)
             results = cascade.submit_requests()
             # results.success / results.failed — no isinstance() checks needed.
@@ -212,7 +212,7 @@ class CascadeWrapperBase:
         values (a `CascadeError`, or the exception a callback raised) stay
         in the list unchanged — nothing is dropped or re-typed. There's no
         need for an `isinstance(result, CascadeError | Exception)` check;
-        `CascadeWrapperBase.__exit__` owns whether a failure ends the
+        `Cascade.__exit__` owns whether a failure ends the
         script (see its docstring and `exit_on_failure`).
 
         If the batch itself breaks (not an individual chain), this raises

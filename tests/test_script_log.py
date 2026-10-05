@@ -6,7 +6,7 @@ import warnings
 import pytest
 from test_wrapper import ID_ONE, StubDriver, make_asset, make_wrapper
 
-from cascade_cms import CascadeWrapperBase
+from cascade_cms import Cascade
 from cascade_cms.cmstypes import IdentifierType
 from cascade_cms.utils import script_log
 from cascade_cms.utils.operation_logger import OperationLogger
@@ -134,7 +134,7 @@ def test_newlines_collapse_to_one_line(tmp_path):
 def test_real_wrapper_routes_and_resets(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     env = {"SERVER": "T", "API_KEY": KEY, "CASCADE_URL": "http://127.0.0.1:1"}
-    with CascadeWrapperBase(env) as cascade:
+    with Cascade(env) as cascade:
         script_log.note(f"k={KEY}")
         path = cascade._logger.log_path
     assert "[NOTE]: k=****wxyz" in path.read_text()

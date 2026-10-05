@@ -1,7 +1,7 @@
 """Failure classification and results for chain execution.
 
 Not re-exported from `cascade_cms/__init__.py` (deliberate — import from
-`cascade_cms.failures` directly). See `wrapper.CascadeWrapperBase` and
+`cascade_cms.utils.failures` directly). See `wrapper.Cascade` and
 `operations.OperationChain` for where these are produced and consumed.
 """
 
@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-from .cmstypes import CascadeError
+from ..cmstypes import CascadeError
 
 
 class FailureCategory(Enum):

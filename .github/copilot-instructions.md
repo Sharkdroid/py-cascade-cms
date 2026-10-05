@@ -22,7 +22,7 @@ python skill/cascade-script-writer/scripts/validate_script.py <script.py>
 **The script is done only when that command exits 0.** Fix what it reports and
 re-run, up to 3 attempts, then show the output verbatim.
 
-Non-negotiables: `CascadeWrapperBase` is the only entry point (never
+Non-negotiables: `Cascade` is the only entry point (never
 `cascade_cms.driver`, never a manual event loop), and `Asset` fields are set by
 attribute assignment, never subscript.
 
