@@ -127,6 +127,18 @@ cascade.operations.read(children)
 assets = cascade.submit_requests(Asset).success
 ```
 
+### Binary file data
+
+Cascade sends binary content (a `file` asset's `data`: image, PDF, zip, ...) as a Java `byte[]`: a
+JSON list of signed ints (-128..127). When an `Asset` is read, a `data` of that shape is held as
+Python `bytes` (about 20x less memory than the int list); any other shape, such as a string, is left
+as is. On `edit()` and `create()`, a bytes-like `data` (`bytes`, `bytearray`, `memoryview`) is
+converted back to the signed list when the request is serialized; strings and lists pass through.
+
+```python
+asset.data = pdf_path.read_bytes()   # bytes in, signed byte array on the wire
+```
+
 ### Logging
 
 `Cascade` accepts an optional second `debug` argument. Leaving it as `None`

@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.10.0]
+
+### Added
+- Binary file content is held as `bytes`. Cascade sends a file asset's `data` as a Java `byte[]` (a JSON list of signed ints, -128..127); reading an `Asset` converts a non-empty list of that shape to `bytes` (about 20x less memory). Other shapes, such as a string, are left untouched.
+- `edit()` and `create()` convert a bytes-like `data` (`bytes`, `bytearray`, `memoryview`) back to the signed int list at serialization time, without mutating the held asset or `NewAsset`. Strings and lists pass through.
+- Helpers `is_java_byte_array`, `bytes_from_cascade`, `bytes_to_cascade` in `cmstypes`.
+
+**Files changed:** `src/cascade_cms/cmstypes.py`, `tests/test_file_data.py`, `tests/test_file_data_memory.py`, `README.md`, `CHANGELOG.md`, `pyproject.toml`
+
 ## [3.8.3]
 
 ### Changed

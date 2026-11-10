@@ -1,6 +1,7 @@
 import json
 import uuid
 import warnings
+from array import array
 from collections.abc import Callable
 from datetime import datetime
 from typing import (
@@ -176,6 +177,43 @@ ALL_CHECKOUT_ASSETS: set[str] = set()
 
 
 # ----- UTILITY FUNCTIONS -----
+
+
+def is_java_byte_array(value: object) -> bool:
+    """True for a non-empty `list` of plain ints, all within -128..127.
+
+    That is how Cascade (Java) serializes `byte[]`, e.g. a file asset's
+    `data`. Strings, `None`, empty lists, bools and out-of-range ints are
+    not byte arrays, so they are never converted.
+    """
+    if not isinstance(value, list) or not value:
+        return False
+    if set(map(type, value)) != {int}:
+        return False
+    return -128 <= min(value) and max(value) <= 127
+
+
+def bytes_from_cascade(data: list[int]) -> bytes:
+    """Signed Java `byte[]` (list of -128..127) -> Python `bytes`."""
+    return array("b", data).tobytes()
+
+
+def bytes_to_cascade(raw: bytes | bytearray | memoryview) -> list[int]:
+    """Python bytes-like -> signed Java `byte[]` (list of -128..127)."""
+    signed = array("b")
+    signed.frombytes(bytes(raw))
+    return signed.tolist()
+
+
+def _encode_byte_data(fields: dict[str, Any]) -> dict[str, Any]:
+    """Return `fields`, with a bytes-like `data` converted to a signed list.
+
+    Returns the same dict when there is nothing to convert; never mutates it.
+    """
+    raw = fields.get("data")
+    if isinstance(raw, (bytes, bytearray, memoryview)):
+        return {**fields, "data": bytes_to_cascade(raw)}
+    return fields
 
 
 def reformat_name(class_name: str):
@@ -365,7 +403,15 @@ class NewAsset(SimplePayload):
     @model_serializer(mode="wrap")
     def serialize_as_asset(self, handler: SerializerFunctionWrapHandler) -> dict:
         """Cascade expects {"asset": {"<type>": {...}}}"""
-        payload_dict = handler(self)
+        # A bytes-like `data` extra (file content) must go out as Cascade's
+        # signed byte array; pydantic would otherwise dump it as utf8 text.
+        target = self
+        extra = self.model_extra or {}
+        if isinstance(extra.get("data"), (bytes, bytearray, memoryview)):
+            target = self.model_copy(
+                update={"data": bytes_to_cascade(extra["data"])}
+            )
+        payload_dict = handler(target)
         asset_type = payload_dict.pop("asset_type")
         cleaned = {k: v for k, v in payload_dict.items() if v is not None}
         return {"asset": {asset_type: cleaned}}
@@ -1245,14 +1291,21 @@ class AssetAdapter:
     """
 
     def validate_json(self, json_str: bytes | str) -> Asset:
-        return Asset(json.loads(json_str))
+        asset = Asset(json.loads(json_str))
+        # Java `byte[]` content (file `data`) is held as `bytes`: ~8x smaller
+        # than a list of ints. Other shapes (e.g. a string) are left alone.
+        if is_java_byte_array(asset._data.get("data")):
+            asset._data["data"] = bytes_from_cascade(asset._data["data"])
+        return asset
 
     def dump_json(self, asset: Asset) -> bytes:
         # `_data` is what gets serialized. The `_page_configs` models are
         # read-only snapshots and are never written back. The raw dicts keep
         # every field the models don't parse (templateId, blockId,
         # formatId, ...), so round-tripping preserves them.
-        data = {**asset._data}
+        # A bytes-like `data` is converted back to the signed int array on
+        # a copy, so the held asset keeps its `bytes`.
+        data = _encode_byte_data({**asset._data})
         reconstructed = {"asset": {asset._asset_type: data}}
         return json.dumps(reconstructed).encode()
 
