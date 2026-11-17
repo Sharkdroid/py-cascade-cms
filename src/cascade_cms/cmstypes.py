@@ -769,23 +769,32 @@ class WorkflowSteps(BaseModel):
     label: str
     step_type: str = Field(validation_alias="stepType", serialization_alias="stepType")
     actions: list[WorkflowAction]
-    owner: str | None
+    owner: str | None = None
 
 
-class workflowInformation(BaseModel):
-    """Response from the `readWorkflowInformation` operation, describing an
-    asset's active workflow instance and its steps/actions."""
+class WorkflowBase(BaseModel):
+    """The `workflow` object inside a `readWorkflowInformation` response."""
 
     model_config = ConfigDict(frozen=True)
 
     related_entity: Annotated[IdentifierType, Field(validation_alias="relatedEntity", serialization_alias="relatedEntity")]
     current_step: Annotated[str, Field(validation_alias="currentStep", serialization_alias="currentStep")]
-    ordered_steps: list[WorkflowSteps]
-    unordered_steps: list[WorkflowSteps]
-    start_date: datetime
-    end_date: datetime
+    ordered_steps: Annotated[list[WorkflowSteps], Field(validation_alias="orderedSteps", serialization_alias="orderedSteps")]
+    unordered_steps: Annotated[list[WorkflowSteps], Field(validation_alias="unorderedSteps", serialization_alias="unorderedSteps")]
+    start_date: Annotated[datetime, Field(validation_alias="startDate", serialization_alias="startDate")]
+    end_date: Annotated[datetime, Field(validation_alias="endDate", serialization_alias="endDate")]
     name: str
-    workflow_info_id: Annotated[uuid.UUID, Field(validation_alias="workflowInfoId", serialization_alias="workflowInfoId")]
+    workflow_info_id: Annotated[uuid.UUID, Field(validation_alias="id", serialization_alias="id")]
+
+
+class workflowInformation(BaseModel):
+    """Response from the `readWorkflowInformation` operation, describing an
+    asset's active workflow instance and its steps/actions. The `success`
+    key is ignored; the workflow itself is under `workflow`."""
+
+    model_config = ConfigDict(frozen=True)
+
+    workflow: WorkflowBase
 
 
 class Audit(BaseModel):

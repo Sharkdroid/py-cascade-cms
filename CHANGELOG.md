@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.10.1]
+
+### Changed
+- **Breaking:** `workflowInformation` is now an envelope with a `workflow` field holding a new `WorkflowBase` model. Read `result.workflow.current_step`, `result.workflow.name`, and so on, instead of the top-level attributes. The `success` key is ignored.
+
+### Fixed
+- `readWorkflowInformation` now parses real Cascade responses. Previously the `workflow` wrapper, `orderedSteps`/`unorderedSteps`/`startDate`/`endDate` keys, and the `id` key (was `workflowInfoId`) did not match the model.
+- `WorkflowSteps.owner` defaults to `None`; system steps omit it.
+
+**Files changed:** `src/cascade_cms/cmstypes.py`, `tests/test_workflow_information.py`, `tests/fixtures/read_workflow_information.json`, `CHANGELOG.md`, `pyproject.toml`
+
 ## [3.10.0]
 
 ### Added

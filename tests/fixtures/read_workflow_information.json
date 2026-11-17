@@ -1,0 +1,162 @@
+{
+    "workflow": {
+        "relatedEntity": {
+            "id": "1d5c8803ac10010f2319434dbf2c1fec",
+            "path": {
+                "path": "programs_hd1/welding-technology/admission-steps",
+                "siteId": "4a8e4126ac10010f1c30bf181c420eb3",
+                "siteName": "wwwdev.csi.edu"
+            },
+            "type": "page",
+            "recycled": false
+        },
+        "currentStep": "review-approver",
+        "orderedSteps": [
+            {
+                "identifier": "initialize",
+                "label": "Initialize",
+                "stepType": "system",
+                "actions": [
+                    {
+                        "identifier": "initialize",
+                        "label": "Initialize",
+                        "actionType": "forward",
+                        "nextId": "b4ced508ac10010f176d5177bf07446c"
+                    }
+                ]
+            },
+            {
+                "identifier": "review-approver",
+                "label": "Approver Review",
+                "stepType": "transition",
+                "owner": "Approvers",
+                "actions": [
+                    {
+                        "identifier": "edit",
+                        "label": "Edit now",
+                        "actionType": "next-id",
+                        "nextId": "b4ced508ac10010f176d5177b023d48f"
+                    },
+                    {
+                        "identifier": "deny",
+                        "label": "Deny",
+                        "actionType": "next-id",
+                        "nextId": "b4ced508ac10010f176d5177a57f5f78"
+                    },
+                    {
+                        "identifier": "approve",
+                        "label": "Approve",
+                        "actionType": "forward",
+                        "nextId": "b4ced508ac10010f176d5177926db4a8"
+                    },
+                    {
+                        "identifier": "send-back",
+                        "label": "Send back to contributor",
+                        "actionType": "next-id",
+                        "nextId": "b4ced508ac10010f176d5177a6e2e360"
+                    }
+                ]
+            },
+            {
+                "identifier": "review-publisher",
+                "label": "Publisher Review",
+                "stepType": "transition",
+                "owner": "Technical Reviewers",
+                "actions": [
+                    {
+                        "identifier": "edit",
+                        "label": "Edit now",
+                        "actionType": "next-id",
+                        "nextId": "b4ced508ac10010f176d5177726d53bc"
+                    },
+                    {
+                        "identifier": "approve",
+                        "label": "Approve",
+                        "actionType": "forward",
+                        "nextId": "b4ced508ac10010f176d517705a5ebd2"
+                    },
+                    {
+                        "identifier": "deny",
+                        "label": "Deny",
+                        "actionType": "next-id",
+                        "nextId": "b4ced508ac10010f176d5177a57f5f78"
+                    },
+                    {
+                        "identifier": "send-back",
+                        "label": "Send back to approver",
+                        "actionType": "next-id",
+                        "nextId": "b4ced508ac10010f176d5177bf07446c"
+                    }
+                ]
+            },
+            {
+                "identifier": "finalize",
+                "label": "Finalize",
+                "stepType": "system",
+                "actions": [
+                    {
+                        "identifier": "finalize",
+                        "label": "Finalize",
+                        "actionType": "forward",
+                        "nextId": "b4ced508ac10010f176d5177a57f5f78"
+                    }
+                ]
+            },
+            {
+                "identifier": "finish",
+                "label": "Finish",
+                "stepType": "system",
+                "actions": []
+            }
+        ],
+        "unorderedSteps": [
+            {
+                "identifier": "edit-owner",
+                "label": "Contributor Edit",
+                "stepType": "edit",
+                "owner": "Contributors",
+                "actions": [
+                    {
+                        "identifier": "edit",
+                        "label": "Edit",
+                        "actionType": "next-id",
+                        "nextId": "b4ced508ac10010f176d5177bf07446c"
+                    }
+                ]
+            },
+            {
+                "identifier": "edit-publisher",
+                "label": "Publisher Edit",
+                "stepType": "edit",
+                "owner": "Technical Reviewers",
+                "actions": [
+                    {
+                        "identifier": "edit",
+                        "label": "Edit",
+                        "actionType": "next-id",
+                        "nextId": "b4ced508ac10010f176d5177926db4a8"
+                    }
+                ]
+            },
+            {
+                "identifier": "edit-approver",
+                "label": "Approver Edit",
+                "stepType": "edit",
+                "owner": "Approvers",
+                "actions": [
+                    {
+                        "identifier": "edit",
+                        "label": "Edit",
+                        "actionType": "next-id",
+                        "nextId": "b4ced508ac10010f176d5177bf07446c"
+                    }
+                ]
+            }
+        ],
+        "startDate": "2026-11-07T07:00:16.254Z",
+        "endDate": "2026-11-14T07:00:16.254Z",
+        "name": "Review workflow for: programs_hd1/welding-technology/admission-steps",
+        "id": "b4ced508ac10010f176d517740bb9629"
+    },
+    "success": true
+}
