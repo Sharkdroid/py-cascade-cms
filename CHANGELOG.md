@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.10.2]
+
+### Fixed
+- `SimplePayload.format_builder` docstring: the example code block sat inside `Returns:`, so the generated docs rendered it as a `dict` return type instead of a code block. It now lives in its own `Example:` section, and a garbled sentence and a stale `handler` argument were removed. Docs only, no runtime change.
+
+**Files changed:** `src/cascade_cms/cmstypes.py`, `CHANGELOG.md`, `pyproject.toml`
+
 ## [3.10.0]
 
 ### Added

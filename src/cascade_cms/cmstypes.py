@@ -310,22 +310,25 @@ class SimplePayload(BaseModel):
 
     @model_serializer  # or @classmethod
     def format_builder(self) -> dict:
-        """Wraps proper headers around payload data.
+        """Wrap the payload's fields under a key named for the payload class.
 
-        Args:
-            handler (SerializerFunctionWrapHandler): Pydantic validation function
+        Field names are serialized by alias, and nested models are
+        serialized by alias too.
 
         Returns:
-            dict[str,object]: serialized wrapped inSerializerFunctionWrapHandler the inherit class name
+            A single-key dict. The key is the payload class name, reformatted
+            by `reformat_name`, and the value is the dict of aliased fields.
+
+        Example:
+            A search payload serializes like this:
 
             ```python
             {
-                "searchInformation"{
+                "searchInformation": {
                     ...
                 }
             }
             ```
-
         """
         subclass_name = self.__class__.__name__
         fields_info = self.__class__.model_fields
